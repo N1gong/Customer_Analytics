@@ -1,0 +1,318 @@
+---
+title: "Home Alarm CLV"
+output: html_document
+---
+
+```{r r_setup, include = FALSE}
+## initial settings
+knitr::opts_chunk$set(
+  comment = NA,
+  echo = TRUE,
+  error = TRUE,
+  cache = FALSE,
+  message = FALSE,
+  dpi = 96,
+  warning = FALSE
+)
+
+## width to use when printing tables etc.
+options(
+  width = 250,
+  scipen = 100,
+  max.print = 5000,
+  stringsAsFactors = FALSE
+)
+```
+
+<style>
+.table {
+  width: auto;
+}
+ul, ol {
+  padding-left: 18px;
+}
+pre, code, pre code {
+  overflow: auto;
+  white-space: pre;
+  word-wrap: normal;
+  background-color: #ffffff;
+}
+</style>
+
+Prepare "Home Alarm, Inc.: Assessing Customer Lifetime Value" for class discussion and as an individual assignment and submit the assignment through GitLab. Be VERY clear about where results are coming from and what assumptions you are making in your R code. It is in your best interest that we do not have to struggle to figure out where your numbers came from. The assignment (pdf) is in the class Dropbox folder (week2/homealarm-ltv.pdf). Example R and Excel calculations are also on Dropbox (week1/readings).
+
+## Setup
+
+Create an rmarkdown document in which you calculate the CLV for a customers who uses auto-pay and for a customer that does not use auto-pay and answer question 1 through 4 in the assignment PDF.
+
+## Hints
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>. Go to http://commonmark.org/help/ for a 10-minute interactive Markdown tutorial
+
+When you click the **Knit** button in Rstudio, a document will be generated that includes both the text you type as well as the output of any embedded R-code chunks within the document.  
+***  
+
+
+## Analysis
+
+The code chunk below sets the attrition notifications you should use in your analysis. 
+
+```{r}
+## Attrition notifications
+churn <- tibble::tibble(
+  no_autopay = c(0.084, 0.122, 0.162, 0.154, 0.134, 0.120, 0.111, 0.096, 0.086),
+  autopay = c(0.032, 0.070, 0.097, 0.103, 0.095, 0.078, 0.069, 0.059, 0.053)
+)
+```
+
+Please generate an HTML (Notebook) with your answers to all the questions listed in the homealarm-clv.pdf file on Dropbox. When you have finished editing the Rmarkdown document and generated the HTML report make sure to save, commit, and push it to GitLab. We will collect all the rmarkdown files from GitLab after the due date.
+
+***  
+
+  
+> The CLV analysis begins on 1/1/Y2, since we're looking for the value of the cohort who are about to start their 2nd year with Home Alarm for the next 8 years, 3.2% has already left us on 12/31/Y1 and the rest will be the whole 100% cohort we start analyzing "today" and they will stay with us the throughout year 2. The total number of years should be 8 years.  
+
+
+>  Therefore, based on the assumption above, during the initial year, 100% of the cohort will be with the company. The company will be notice about their leaves at the end of each the year thereafter. Also, the company has a policy of collecting payment at the end of each month, which means we need to discount back the first payment as well.  
+
+
+  
+### Part A - CLV analysis for auto-pay customers  
+  
+```{r}
+## Revenue
+rmr <- 40
+## Discount rate
+annual_discount_rate <- 0.1
+monthly_discount_rate <- (1 + annual_discount_rate)^(1 / 12) - 1
+## Churn (auto-pay cohort)
+annual_churn_auto <- c(0, churn$autopay[2:8])
+retained_y2 <- 1 - annual_churn_auto[1]
+retained_y3 <- retained_y2 - retained_y2 * annual_churn_auto[2]
+retained_y4 <- retained_y3 - retained_y3 * annual_churn_auto[3]
+retained_y5 <- retained_y4 - retained_y4 * annual_churn_auto[4]
+retained_y6 <- retained_y5 - retained_y5 * annual_churn_auto[5]
+retained_y7 <- retained_y6 - retained_y6 * annual_churn_auto[6]
+retained_y8 <- retained_y7 - retained_y7 * annual_churn_auto[7]
+retained_y9 <- retained_y8 - retained_y8 * annual_churn_auto[8]
+## Variable cost
+cost_service <- 0.15
+marketing_cost <- 0.05
+## Number of years
+nr_years <- 8
+## general increase
+growth_rate <- 0.03
+## variables to be used for CLV calculations
+time <- 1:(nr_years * 12)
+revenues <- c(rep(rmr, each = 12), rep(rmr * (1 + growth_rate), each = 12), rep(rmr * (1 + growth_rate)^2, each = 12), rep(rmr * (1 + growth_rate)^3, each = 12), rep(rmr * (1 + growth_rate)^4, each = 12), rep(rmr * (1 + growth_rate)^5, each = 12), rep(rmr * (1 + growth_rate)^6, each = 12), rep(rmr * (1 + growth_rate)^7, each = 12))
+service <- cost_service * revenues
+marketing <- marketing_cost * revenues
+profit <- revenues - service - marketing
+active <- c(rep(retained_y2, each = 12), rep(retained_y3, each = 12), rep(retained_y4, each = 12), rep(retained_y5, each = 12), rep(retained_y6, each = 12), rep(retained_y7, each = 12), rep(retained_y8, each = 12), rep(retained_y9, each = 12))
+exp_profit <- active * profit
+PV_exp_profit <- exp_profit / (1 + monthly_discount_rate)^time
+## get the cumulated net present profit month by month
+CLV <- cumsum(PV_exp_profit)
+## make time and cumulated profit a dataframe: auto_pay
+auto_pay <- tibble::tibble(time = time, CLV = CLV)
+head(auto_pay)
+tail(auto_pay)
+```
+  
+  
+**let's take a look of how the aggregated value changes over time**  
+
+```{r echo=FALSE}
+radiant.data::visualize(auto_pay, xvar = "time", yvar = "CLV", type = "line", custom = TRUE)
+```
+
+#### Q1  
+
+**The CLV column in auto_pay contains a customer's accumulated value to the company aggregated by month, therefore, the last value, $1803.66, is a auto-pay customer's CLV to the company.**  
+
+```{r}
+(auto_clv <- auto_pay$CLV[96])
+```
+  
+***  
+
+
+### Part B - CLV analysis for non auto-pay customers  
+  
+```{r}
+annual_discount_rate <- 0.1
+monthly_discount_rate <- (1 + annual_discount_rate)^(1 / 12) - 1
+## Churn for non auto-pay customers
+annual_churn_non <- c(0, churn$no_autopay[2:8])
+## retain rate for non auto-pay customers
+retained_y2 <- 1 - annual_churn_non[1]
+retained_y3 <- retained_y2 - retained_y2 * annual_churn_non[2]
+retained_y4 <- retained_y3 - retained_y3 * annual_churn_non[3]
+retained_y5 <- retained_y4 - retained_y4 * annual_churn_non[4]
+retained_y6 <- retained_y5 - retained_y5 * annual_churn_non[5]
+retained_y7 <- retained_y6 - retained_y6 * annual_churn_non[6]
+retained_y8 <- retained_y7 - retained_y7 * annual_churn_non[7]
+retained_y9 <- retained_y8 - retained_y8 * annual_churn_non[8]
+cost_service <- 0.15
+marketing_cost <- 0.05
+instal_charge <- 195
+instal_cost <- 492
+nr_years <- 8
+growth_rate <- 0.03
+time <- 1:(nr_years * 12)
+revenues <- c(rep(rmr, each = 12), rep(rmr * (1 + growth_rate), each = 12), rep(rmr * (1 + growth_rate)^2, each = 12), rep(rmr * (1 + growth_rate)^3, each = 12), rep(rmr * (1 + growth_rate)^4, each = 12), rep(rmr * (1 + growth_rate)^5, each = 12), rep(rmr * (1 + growth_rate)^6, each = 12), rep(rmr * (1 + growth_rate)^7, each = 12))
+service <- cost_service * revenues
+marketing <- marketing_cost * revenues
+profit <- revenues - service - marketing
+active <- c(rep(retained_y2, each = 12), rep(retained_y3, each = 12), rep(retained_y4, each = 12), rep(retained_y5, each = 12), rep(retained_y6, each = 12), rep(retained_y7, each = 12), rep(retained_y8, each = 12), rep(retained_y9, each = 12))
+exp_profit <- active * profit
+PV_exp_profit <- exp_profit / (1 + monthly_discount_rate)^time
+## Cumulated CLV by month for non auto-pay customers
+CLV <- cumsum(PV_exp_profit)
+```
+
+#### Q2  
+  
+**The last value in CLV, CLV = $1566.113 is a non auto-pay customer's life time value accumulated by month over 96 months.**  
+
+```{r}
+(noauto_clv <- CLV[96])
+```
+
+
+#### Q3  
+  
+**Let's first get some feeling of how different an auto-pay customer could value to us from a non auto-pay customer over time**  
+
+```{r echo=FALSE}
+pay_method <- tibble::tibble(time, autopay = auto_pay$CLV, no_autopay = CLV)
+# head(pay_method)
+# tail(pay_method)
+radiant.data::visualize(
+  pay_method,
+  xvar = "time",
+  yvar = c("autopay", "no_autopay"),
+  comby = TRUE,
+  type = "line",
+  labs = list(y = "CLV", color = "")
+)
+```
+
+**The difference of the aggregated CLV between auto-pay and non auto-pay customer will be the theoratical maximum "effort" we would make to persuade the current non auto-pay customer to sign-up for auto-pay. Based on our calculation, this amount is $249.9**
+```{r}
+(diff <- auto_clv - noauto_clv)
+```
+***  
+
+  
+### Q4  
+
+> Based on the analysis, we know that the max monetary amount we could offer to convince an existing customer to convert to auto-pay is $249.9(NPV), assuming he will stay with us for at least the rest 8 years since the conversion. We therefore propose the following three incentive programs to Home Alarm for consideration:  
+
+### Solution One - Sign up Now and get half-year Free  
+  
+**If current non auto-pay cohort switch to auto pay starting year 2, we'll offer six months free service right away! However, for later opt-out or ending the contract completely, we'll charge a minimum penalty of $200. The revised CLV from year 2 to year 9 under this promotion is $1616.9, lower than the existing auto-pay cohort CLV but still higher than current non auto-pay's life time value.**  
+  
+**The potential problem with this promotion is that it might hurt current auto-pay users who still need to pay at the normal rate. They could be so unhappy with our discrimination that choose to leave us the next year**
+
+
+```{r}
+## Revenue
+rmr <- 40
+rar <- 480
+## Discount rate
+annual_discount_rate <- 0.1
+monthly_discount_rate <- (1 + annual_discount_rate)^(1 / 12) - 1
+## Churn (auto-pay cohort)
+annual_churn_auto <- c(0, churn$autopay[2:8])
+retained_y2 <- 1 - annual_churn_auto[1]
+retained_y3 <- retained_y2 - retained_y2 * annual_churn_auto[2]
+retained_y4 <- retained_y3 - retained_y3 * annual_churn_auto[3]
+retained_y5 <- retained_y4 - retained_y4 * annual_churn_auto[4]
+retained_y6 <- retained_y5 - retained_y5 * annual_churn_auto[5]
+retained_y7 <- retained_y6 - retained_y6 * annual_churn_auto[6]
+retained_y8 <- retained_y7 - retained_y7 * annual_churn_auto[7]
+retained_y9 <- retained_y8 - retained_y8 * annual_churn_auto[8]
+## Variable cost
+cost_service <- 0.15
+marketing_cost <- 0.05
+## Number of years
+nr_years <- 8
+## general increase
+growth_rate <- 0.03
+## variables to be used for CLV calculations
+time <- 1:(nr_years * 12)
+revenues <- c(0, 0, 0, 0, 0, 0, rep(rmr, each = 6), rep(rmr * (1 + growth_rate), each = 12), rep(rmr * (1 + growth_rate)^2, each = 12), rep(rmr * (1 + growth_rate)^3, each = 12), rep(rmr * (1 + growth_rate)^4, each = 12), rep(rmr * (1 + growth_rate)^5, each = 12), rep(rmr * (1 + growth_rate)^6, each = 12), rep(rmr * (1 + growth_rate)^7, each = 12))
+service <- cost_service * revenues
+marketing <- marketing_cost * revenues
+profit <- revenues - service - marketing
+active <- c(rep(retained_y2, each = 12), rep(retained_y3, each = 12), rep(retained_y4, each = 12), rep(retained_y5, each = 12), rep(retained_y6, each = 12), rep(retained_y7, each = 12), rep(retained_y8, each = 12), rep(retained_y9, each = 12))
+exp_profit <- active * profit
+PV_exp_profit <- exp_profit / (1 + monthly_discount_rate)^time
+
+## CLV with Discount vs. regular auto-pay
+sum(PV_exp_profit) - 1803.660
+```
+ 
+### Solution Two - Step Cash Rebate  
+
+**As we see that the peak churn occurs around year 3, 4 and 5, we should focus heavyly on beating the churn rate during this period. therefore, we can apply a step cash reward that spread the cash rebate over 3 period and lure the customer to keep staying with us. If current non auto-pay cohort switch to auto pay beginning year 2, we offer an immediate cash rebate of $150 and another rebate of $200 at the end of year 4(after 36 auto-payments made) if we still have the customer with us for next year.**  
+  
+**The revised CLV under this plan for auto-pay cohort is $1583.658, lower than the current auto-pay cohort by $220 but still higher than do nothing. Compare to the first plan, this offer will probabaly has less negative effect on the existing auto-pay customer, but is also less appealing than the first one at the first sight, though it is more expensive. Moreover, to avoid people taking the money and ending the contract, we should add penalty term and make it clear to the customer that the cash rebate will be contingent on the long-term relationship with the company.** 
+
+```{r}
+revenues <- c(rmr - 150, rep(rmr, each = 11), rep(rmr * (1 + growth_rate), each = 12), rep(rmr * (1 + growth_rate)^2, each = 11), rmr * (1 + growth_rate)^2 - 200, rep(rmr * (1 + growth_rate)^3, each = 12), rep(rmr * (1 + growth_rate)^4, each = 12), rep(rmr * (1 + growth_rate)^5, each = 12), rep(rmr * (1 + growth_rate)^6, each = 12), rep(rmr * (1 + growth_rate)^7, each = 12))
+service <- cost_service * revenues
+marketing <- marketing_cost * revenues
+profit <- revenues - service - marketing
+active <- c(rep(retained_y2, each = 12), rep(retained_y3, each = 12), rep(retained_y4, each = 12), rep(retained_y5, each = 12), rep(retained_y6, each = 12), rep(retained_y7, each = 12), rep(retained_y8, each = 12), rep(retained_y9, each = 12))
+exp_profit <- active * profit
+PV_exp_profit <- exp_profit / (1 + monthly_discount_rate)^time
+
+## CLV with Discount vs. regular auto-pay
+sum(PV_exp_profit) - 1803.660
+```
+  
+### Solution Three -  Five-year Discount  
+
+**If current non auto-pay cohort switch to auto pay since year 2, we will reduce the monthly by 15% for the next 5 years; however, we'll charge back $300 as penaly if the customer leaves too early. The revised CLV under this promotion is $1573.7, which is similar to the second one. The advantage of this solution is that, first, it gives customers a continuous long-term offer making us easier to maintain the long-term relationship than the step rebate; second, to the existing auto-pay cohort, a 15% discount sounds much less offensive than half-year free service and is therefore less desdructive to our relationship with the current auto-pay cohort.**  
+
+**However, the potential risk of this plan is that, people might get insensitive to the discounted monthly payment over time and choose to leave anyway just like regular non auto-pay customers, rendering the promotion ineffective; besides, once the promotion period ended, they might be relunctant to keep using our service at a higher though normal rate. Some of them may even start looking for better price in the market before the end of the program to get prepared for a new lower-priced service provider once it's over.**
+```{r}
+## Revenue
+rmr <- 40
+rar <- 480
+## Discount rate
+annual_discount_rate <- 0.1
+monthly_discount_rate <- (1 + annual_discount_rate)^(1 / 12) - 1
+## Churn (auto-pay cohort)
+annual_churn_auto <- c(0, churn$autopay[2:8])
+retained_y2 <- 1 - annual_churn_auto[1]
+retained_y3 <- retained_y2 - retained_y2 * annual_churn_auto[2]
+retained_y4 <- retained_y3 - retained_y3 * annual_churn_auto[3]
+retained_y5 <- retained_y4 - retained_y4 * annual_churn_auto[4]
+retained_y6 <- retained_y5 - retained_y5 * annual_churn_auto[5]
+retained_y7 <- retained_y6 - retained_y6 * annual_churn_auto[6]
+retained_y8 <- retained_y7 - retained_y7 * annual_churn_auto[7]
+retained_y9 <- retained_y8 - retained_y8 * annual_churn_auto[8]
+## Variable cost
+cost_service <- 0.15
+marketing_cost <- 0.05
+## Number of years
+nr_years <- 8
+## general increase
+growth_rate <- 0.03
+## variables to be used for CLV calculations
+time <- 1:(nr_years * 12)
+revenues <- c(rep(rmr * 0.85, each = 12), rep(rmr * 0.85 * (1 + growth_rate), each = 12), rep(rmr * 0.85 * (1 + growth_rate)^2, each = 12), rep(0.85 * rmr * (1 + growth_rate)^3, each = 12), rep(0.85 * rmr * (1 + growth_rate)^4, each = 12), rep(0.85 * rmr * (1 + growth_rate)^5, each = 12), rep(rmr * (1 + growth_rate)^6, each = 12), rep(rmr * (1 + growth_rate)^7, each = 12))
+service <- cost_service * revenues
+marketing <- marketing_cost * revenues
+profit <- revenues - service - marketing
+active <- c(rep(retained_y2, each = 12), rep(retained_y3, each = 12), rep(retained_y4, each = 12), rep(retained_y5, each = 12), rep(retained_y6, each = 12), rep(retained_y7, each = 12), rep(retained_y8, each = 12), rep(retained_y9, each = 12))
+exp_profit <- active * profit
+PV_exp_profit <- exp_profit / (1 + monthly_discount_rate)^time
+
+## CLV with Discount vs. regular auto-pay
+sum(PV_exp_profit) - 1803.660
+```
+
