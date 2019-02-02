@@ -1,0 +1,293 @@
+---
+title: Tuango - RFM Analysis for Mobile App Push Messaging on the post roll-out data
+output: html_document
+---
+
+* Name: Nawen Gong
+* GitLab id: rsm-n1gong
+* GitLab username: Nawen Gong
+
+```{r r_setup, include = FALSE}
+## initial settings
+knitr::opts_chunk$set(
+  comment = NA,
+  echo = TRUE,
+  error = TRUE,
+  cache = FALSE,
+  message = FALSE,
+  dpi = 96,
+  warning = FALSE
+)
+
+## width to use when printing tables etc.
+options(
+  width = 250,
+  scipen = 100,
+  max.print = 5000,
+  stringsAsFactors = FALSE
+)
+
+## make all required libraries available by loading radiant package if needed
+if (!exists("r_environment")) library(radiant)
+```
+
+<style>
+.table {
+  width: auto;
+}
+ul, ol {
+  padding-left: 18px;
+}
+pre, code, pre code {
+  overflow: auto;
+  white-space: pre;
+  word-wrap: normal;
+  background-color: #ffffff;
+}
+</style>
+
+## Setup
+
+Please complete this Rmarkdown document by answering question 14 in `tuango.pdf` on Dropbox (week4/readings/). The code block below will load the data you will need. Create a Notebook/HTML file with all your results and answers and push both the Rmarkdown and Notebook/HTML file to GitLab when you are done. All results MUST be reproducible (i.e., the TA and I must be able to recreate the Notebook/HTML from the Rmarkdown file without changes or errors).
+
+```{r include=FALSE}
+## loading the data. Note that data must be loaded from Dropbox/MGTA455-2019/data
+tuango_post <- readr::read_rds(file.path(radiant.data::find_dropbox(), "MGTA455-2019/data/tuango_post.rds"))
+```  
+
+**Function for model evaluation**  
+```{r}
+perf_test <- function(df) {
+  perc_sms <- mean(df$smsto)
+  dat <- filter(df, smsto == TRUE)
+  resp <- mean(dat$buyer == "yes")
+
+  numsms <- sum(dat$smsto == TRUE)
+  smscost <- numsms * 1.6
+  exp_buyer <- sum(dat$buyer == "yes")
+  profit <- sum(dat$ordersize[dat$buyer == 'yes']) * 0.5 - smscost
+  ROME <- profit / smscost
+
+  prnt <- paste0("Based on independent RFM the number of customers Tuango should message is ", format_nr(numsms, dec = 0), "/", format_nr(perc_sms, perc = TRUE), ". The actual response rate is ", format_nr(resp, perc = TRUE), " or, ", format_nr(exp_buyer, dec = 0), " buyers. The actual profit is ", format_nr(profit, "$", dec = 0), ". The messaging cost is ", format_nr(smscost, "$", dec = 0), " with a ROME of ", format_nr(ROME, perc = FALSE))
+
+  per_test <- data.frame(numsms, perc_sms, resp, exp_buyer, profit, smscost, ROME, prnt)
+}
+```  
+
+## Question answers
+
+## Using tuango_post to evaulate different models. The baseline is No RFM  
+
+### 1. Baseline Model: NO RFM  
+```{r}
+train_base <- filter(tuango_post, training == 1)
+test_base <- filter(tuango_post, training == 0)
+
+# Test Baseline Model(no rfm)
+deal_cost <- 1.6
+cus_total <- length(unique(test_base$userid))
+sms_cost <- 1.6 * cus_total
+
+# Performance
+profit_base <- sum(test_base$ordersize) * 0.5 - sms_cost
+ROME_base <- profit_base / sms_cost
+```  
+The profit of messaging to everyone in the test set is `r format_nr(profit_base, "$", dec = 0)`.
+The ROME of messaging to everyone in the test set is `r format_nr(ROME_base, perc = TRUE)`.  
+  
+  
+### 2. Independent RFM Model  
+```{r}
+# Independent RFM Indexing
+dat_iq <- tuango_post %>%
+  mutate(
+    rec_iq = xtile(recency, 5),
+    freq_iq = xtile(frequency, 5, rev = TRUE),
+    mone_iq = xtile(monetary, 5, rev = TRUE)
+  ) %>%
+  mutate(rfm_iq = paste0(rec_iq, freq_iq, mone_iq))
+
+# Check rfm-iq ids are correct
+paste0("The 'rfm_iq' and 'rfm_iq_pre' are the same: ", identical(dat_iq$rfm_iq, dat_iq$rfm_iq_pre))
+```  
+
+
+#### Using trainign data to get profitable RFM id which will then be used on test set to evaluate the model performance
+```{r}
+train_iq <- filter(dat_iq, training == 1)
+
+# get test data
+test_iq <- filter(dat_iq, training == 0)
+
+# Break-even resp
+avg_spend_iq <- sum(train_iq$ordersize[train_iq$buyer == 'yes']) / sum(train_iq$buyer == "yes")
+break_even_iq <- 1.6 / (avg_spend_iq * 0.5)
+
+# smsto
+train_iq <- train_iq %>%
+  group_by(rfm_iq) %>%
+  mutate(smsto = mean(buyer == "yes") > break_even_iq) %>%
+  ungroup()
+
+smsto_iq <- train_iq$rfm_iq[train_iq$smsto == TRUE]
+
+# test iq for EVAL
+test_iq <- test_iq %>%
+  mutate(smsto = ifelse(test_iq$rfm_iq %in% smsto_iq, TRUE, FALSE))
+```
+  
+  
+### Evaluate the model: rfm-iq
+```{r echo=FALSE, results="asis"}
+res_iq <- perf_test(test_iq)
+profit_iq <- res_iq$profit
+ROME_iq <- res_iq$ROME
+cat(res_iq$prn)
+```
+
+
+### 3. Sequential RFM Model: Using flat break-even across all cells  
+```{r}
+# Squential indexing
+dat_sq <- tuango_post %>%
+  mutate(rec_sq = xtile(recency, 5)) %>%
+  group_by(rec_sq) %>%
+  mutate(freq_sq = xtile(frequency, 5, rev = TRUE)) %>%
+  group_by(rec_sq, freq_sq) %>%
+  mutate(mone_sq = xtile(monetary, 5, rev = TRUE)) %>%
+  mutate(rfm_sq = paste0(rec_sq, freq_sq, mone_sq)) %>%
+  ungroup()
+```  
+
+#### Using trainign data to get profitable RFM id which will then be used on test set to evaluate the model performance
+```{r}
+train_sq <- filter(dat_sq, training == 1)
+test_sq <- filter(dat_sq, training == 0)
+
+## sq using flat break-even
+avg_spend_sq <- sum(train_sq$ordersize) / sum(train_sq$buyer == "yes")
+break_even_sq <- 1.6 / (avg_spend_sq * 0.5)
+
+train_sqflat <- train_sq %>%
+  group_by(rfm_sq) %>%
+  mutate(smsto = mean(buyer == "yes") > break_even_sq) %>%
+  ungroup()
+smsto_sq <- train_sqflat$rfm_sq[train_sqflat$smsto == TRUE]
+
+test_sqflat <- test_sq %>%
+  mutate(smsto = ifelse(rfm_sq %in% smsto_sq, TRUE, FALSE))
+```  
+
+
+### Evaluate the model: rfm-sq flat break-even 
+```{r echo=FALSE, results="asis"}
+res_sqflat <- perf_test(test_sqflat)
+profit_sqflat <- res_sqflat$profit
+ROME_sqflat <- res_sqflat$ROME
+cat(res_sqflat$prn)
+```  
+
+  
+### 4. Sequential RFM Model: Using break-even for each rfm_sq cell  
+```{r}
+## sq using cell break-even
+train_sqcell <- train_sq %>%
+  group_by(rfm_sq) %>%
+  summarise(resp = mean(buyer == "yes"), avg_spend_sqcell = sum(ordersize) / sum(buyer == "yes"), break_even_sqcell = 1.6 / (0.5 * avg_spend_sqcell)) %>%
+  mutate(smsto = resp > break_even_sqcell) %>%
+  ungroup()
+smsto_sqcell <- train_sqcell$rfm_sq[train_sqcell$smsto == TRUE]
+
+test_sqcell <- test_sq %>%
+  mutate(smsto = ifelse(rfm_sq %in% smsto_sqcell, TRUE, FALSE))
+```  
+  
+  
+### Evaluate the model: rfm-sq cell break-even  
+```{r echo=FALSE, results="asis"}
+res_sqcell <- perf_test(test_sqcell)
+profit_sqcell <- res_sqcell$profit
+ROME_sqcell <- res_sqcell$ROME
+cat(res_sqcell$prnt)
+```  
+
+  
+### 5. Independent RFM Using Lower Bound(95% conf.)  
+```{r}
+## iq using lower bound
+train_iqlb <- train_iq %>%
+  group_by(rfm_iq) %>%
+  mutate(smsto = (mean(buyer == "yes") - 1.64 * seprop(buyer == "yes")) > break_even_iq) %>%
+  ungroup()
+smsto_iqlb <- train_iqlb$rfm_iq[train_iqlb$smsto == TRUE]
+
+test_iqlb <- test_iq %>%
+  mutate(smsto = ifelse(rfm_iq %in% smsto_iqlb, TRUE, FALSE))
+```  
+
+  
+### Evaluate the model: IQ-RFM Lower Bound  
+```{r echo=FALSE, results="asis"}
+res_iqlb <- perf_test(test_iqlb)
+profit_iqlb <- res_iqlb$profit
+ROME_iqlb <- res_iqlb$ROME
+cat(res_iqlb$prnt)
+```  
+
+  
+### 6. Sequential RFM Using Lower Bound(95% conf.)  
+```{r}
+## sq using lower bound
+train_sqlb <- train_sq %>%
+  group_by(rfm_sq) %>%
+  mutate(smsto = (mean(buyer == "yes") - 1.64 * seprop(buyer == "yes")) > break_even_sq) %>%
+  ungroup()
+smsto_sqlb <- train_sqlb$rfm_sq[train_sqlb$smsto == TRUE]
+
+test_sqlb <- test_sq %>%
+  mutate(smsto = ifelse(rfm_sq %in% smsto_sqlb, TRUE, FALSE))
+```  
+  
+
+### Evaluate the model: SQ-RFM Lower Bound  
+```{r echo=FALSE, results="asis"}
+res_sqlb <- perf_test(test_sqlb)
+profit_sqlb <- res_sqlb$profit
+ROME_sqlb <- res_sqlb$ROME
+cat(res_sqlb$prnt)
+```  
+
+```{r}
+tuango_post_eval <- data.frame(name = c("No targeting", "Indep. RFM", "Sequen. RFM", "Sequence Cell. RFM", "Indep. lb RFM", "Seq. lb RFM"), Profit = c(profit_base, profit_iq, profit_sqflat, profit_sqcell, profit_iqlb, profit_sqlb),
+ROME = c(ROME_base, ROME_iq, ROME_sqflat, ROME_sqcell, ROME_iqlb, ROME_sqlb))
+```  
+
+### Profit Comparison  
+```{r echo=FALSE, fig.height=5, fig.width=8}
+## plot campaign profit
+visualize(
+  tuango_post_eval,
+  xvar = "name",
+  yvar = "Profit",
+  type = "bar",
+  labs = list(title = "SMS profit", x = ""),
+  custom = TRUE
+) +
+  geom_text(aes(label = format_nr(Profit, dec = 0)), vjust = 2)
+```  
+  
+### ROME Comparison  
+```{r echo=FALSE, fig.height=5, fig.width=8}
+## plot ROME
+visualize(
+  tuango_post_eval,
+  xvar = "name",
+  yvar = "ROME",
+  type = "bar",
+  labs = list(title = "Return on Marketing Expenditures (ROME)", x = ""),
+  custom = TRUE
+) +
+  geom_text(aes(label = format_nr(ROME, dec = 2)), vjust = 2)
+```
+
+
