@@ -1,0 +1,131 @@
+---
+title: "Home Alarm CLV"
+output: html_document
+---
+
+```{r r_setup, include = FALSE}
+## initial settings
+knitr::opts_chunk$set(
+  comment = NA,
+  echo = TRUE,
+  error = TRUE,
+  cache = FALSE,
+  message = FALSE,
+  dpi = 96,
+  warning = FALSE
+)
+
+## width to use when printing tables etc.
+options(
+  width = 250,
+  scipen = 100,
+  max.print = 5000,
+  stringsAsFactors = FALSE
+)
+```
+
+<style>
+.table {
+  width: auto;
+}
+ul, ol {
+  padding-left: 18px;
+}
+pre, code, pre code {
+  overflow: auto;
+  white-space: pre;
+  word-wrap: normal;
+  background-color: #ffffff;
+}
+</style>
+
+Prepare "Home Alarm, Inc.: Assessing Customer Lifetime Value" for class discussion and as an individual assignment and submit the assignment through GitLab. Be VERY clear about where results are coming from and what assumptions you are making in your R code. It is in your best interest that we do not have to struggle to figure out where your numbers came from. The assignment (pdf) is in the class Dropbox folder (week2/homealarm-ltv.pdf). Example R and Excel calculations are also on Dropbox (week1/readings).
+
+## Setup
+
+Create an rmarkdown document in which you calculate the CLV for a customers who uses auto-pay and for a customer that does not use auto-pay and answer question 1 through 4 in the assignment PDF.
+
+## Hints
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>. Go to http://commonmark.org/help/ for a 10-minute interactive Markdown tutorial
+
+When you click the **Knit** button in Rstudio, a document will be generated that includes both the text you type as well as the output of any embedded R-code chunks within the document.  
+***  
+
+
+## Analysis
+
+The code chunk below sets the attrition notifications you should use in your analysis. 
+
+```{r}
+## Attrition notifications
+churn <- tibble::tibble(
+  no_autopay = c(0.084, 0.122, 0.162, 0.154, 0.134, 0.120, 0.111, 0.096, 0.086),
+  autopay = c(0.032, 0.070, 0.097, 0.103, 0.095, 0.078, 0.069, 0.059, 0.053)
+)
+```
+
+Please generate an HTML (Notebook) with your answers to all the questions listed in the homealarm-clv.pdf file on Dropbox. When you have finished editing the Rmarkdown document and generated the HTML report make sure to save, commit, and push it to GitLab. We will collect all the rmarkdown files from GitLab after the due date.
+
+***  
+
+  
+```{r}
+library(tidyverse)
+```
+
+```{r}
+RMR <- 40
+growth <- 0.03
+cost <- 0.15*RMR
+marketing <- 0.05*RMR
+churn_rate <- churn[2:8,]
+disc <- 0.1
+
+# Monthly conversion: pay at the end of month
+# Assumption: year 2 begins on 1/1/Y2, year end is 12/31/Y9
+
+churn_auto <- c(0, churn_rate$autopay)
+churn_non <- c(0, churn_rate$no_autopay)
+
+# retained is the same each month, but changes every year
+retained_auto <- rep(cumprod(1-churn_auto), each=12) 
+retained_non <- rep(cumprod(1-churn_non), each=12)
+
+mdisc <- (1+disc)^(1/12) - 1
+
+profit <- (RMR - cost - marketing)*12
+Y <- 0:7
+
+#profit is the same every month, but grows every year
+## First year revenue is the base, growing begings on the next year
+mprofit <- rep((profit*(1+growth)^Y)/12, each = 12)  
+
+mclv_auto <- (mprofit*retained_auto) / (1+mdisc)^(1:96) # pay at the end of each month
+CLV_auto <- cumsum(mclv_auto)
+
+mclv_non <- (mprofit*retained_non) / (1+mdisc)^(1:96)
+CLV_non <- cumsum(mclv_non)
+```
+
+
+
+```{r}
+auto_pay <- tibble(CLV = CLV_auto, time = 1:96)
+radiant.data::visualize(auto_pay, xvar = "time", yvar = "CLV", type = "line", custom = TRUE)
+```
+```{r}
+non_autopay <- tibble(CLV = CLV_non, time = 1:96)
+radiant.data::visualize(non_autopay, xvar = "time", yvar = "CLV", type = "line", custom = TRUE)
+```
+```{r}
+# plot two together
+all_clv <- tibble(time = 1:96, auto = CLV_auto, non_auto = CLV_non)
+radiant.data::visualize(all_clv, 
+                        xvar = 'time', 
+                        yvar = c('auto','non_auto'), 
+                        comby = TRUE,
+                        type = "line",
+                        labs = list(y = "CLV", color = ""))
+```
+
