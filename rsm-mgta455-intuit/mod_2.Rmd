@@ -1,0 +1,651 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(radiant)
+library(matrixStats)
+```
+
+```{r}
+intuit75k <- readr::read_rds(file.path(radiant.data::find_dropbox(), "MGTA455-2019/data/intuit75k.rds"))
+
+intuit75k <- intuit75k %>% 
+  mutate(zip_fac = factor(zip_bins))
+
+intuit75k <- intuit75k %>% mutate(VI = ifelse(substr(zip, 1, 3) == '008', TRUE, FALSE))
+
+```
+
+
+
+```{r}
+mail_cost <- 1.41
+sales_margin <- 60
+break_even_resp <- (mail_cost / sales_margin)*2
+```
+
+
+```{r}
+perf_eval <- function(df) {
+  
+  cus <- nrow(df)
+  perc_mail <- mean(df$mailto_wave2)
+  dat <- filter(df, mailto_wave2 == TRUE)
+  resp <- mean(dat$res1 == 'Yes')
+  act_resp <- mean(df$res1 == 'Yes') 
+
+  nummail <- sum(df$mailto_wave2)
+  mailcost <- nummail * mail_cost
+
+  exp_buyer <- sum(dat$res1 == 'Yes')
+  act_buyer <- sum(df$res1 == 'Yes')
+
+  exp_margin <- exp_buyer*sales_margin
+  act_margin <- sum(df$res1 == 'Yes') * sales_margin
+
+  profit <- exp_buyer *sales_margin - mailcost
+  ROME <- profit / mailcost
+  
+  AUC <- auc(as.numeric(df$mailto_wave2), df$res1, 'Yes')
+  
+  prnt <- paste0("Based on our analysis, the number of customers Intuit should mail is ", format_nr(nummail, dec = 0), " that is ", format_nr(perc_mail, perc = TRUE), " of the customers. The response rate for the selected customers is predicted to be ", format_nr(resp, perc = TRUE), ", or, ", format_nr(exp_buyer, dec = 0), " buyers; while the actual response rate is ", format_nr(act_resp, perc = TRUE), ", or, ", format_nr(act_buyer, dec=0), "The predicted margin is ", format_nr(exp_margin, "$", dec = 2), "; while actual margin is ", format_nr(act_margin, "$", dec=2),  ". The expected profit is ", format_nr(profit, "$", dec = 0), ". The messaging cost is estimated to be ", format_nr(mailcost, "$", dec = 0), " with a ROME of ", format_nr(ROME, perc = FALSE))
+
+  perf <- data.frame(nummail, perc_mail, resp, exp_buyer, exp_margin, profit, mailcost, ROME, AUC, prnt)
+
+}
+```
+
+
+```{r}
+## 1. sq. RFM model
+
+intuit75k <- intuit75k %>%
+  group_by(zip_fac) %>% 
+  mutate(rec = xtile(last, 5)) %>%
+  group_by(rec) %>%
+  mutate(freq =xtile(numords, 5, rev = TRUE)) %>%
+  group_by(rec, freq) %>%
+  mutate(mon = xtile(dollars, 5, rev = TRUE)) %>%
+  mutate(rfm_sq = paste0(rec, freq, mon)) %>%
+  ungroup()
+  # group_by(rfm_sq) %>%
+  # mutate(rfm_dec = xtile())
+```
+
+
+### RFM by Zip
+```{r}
+
+train <- intuit75k %>%
+  filter(training == 1) %>%
+  group_by(rfm_sq) %>%
+  mutate(rfm_resp = mean(res1 == 'Yes'),
+         #rfm_dec = xtile(rfm_resp, 10, rev = TRUE),
+         mailto_wave2 = rfm_resp > break_even_resp) %>%
+  ungroup()
+
+rfm_id <- train$rfm_sq[train$mailto_wave2 == TRUE]
+```
+
+```{r}
+val <- intuit75k %>%
+  filter(training == 0)
+
+
+val$mailto_wave2 <- ifelse(val$rfm_sq %in% rfm_id, TRUE, FALSE)
+
+val <- val %>% 
+  group_by(rfm_sq) %>% 
+  mutate(rfm_resp = mean(res1 == 'Yes')) %>% 
+  ungroup()
+
+```  
+
+
+```{r}
+perf_rfm_train <- perf_eval(train)
+perf_rfm_val <- perf_eval(val)
+```  
+
+```{r results="asis"}
+perf_rfm_train$prnt
+
+perf_rfm_val$prnt
+```
+
+
+
+### Logit
+
+
+log_res <- logistic(
+  train, 
+  rvar = "res1", 
+  evar = c("bizflag", "sex", "dollars", "last", "zip_fac", "owntaxprod", "version1", "upgraded"), 
+  lev = "Yes", 
+  check = "standardize"
+)
+# summary(log_res)
+
+
+
+
+
+```{r}
+seed = 1234
+log_tr_pred <- data.frame(id = train$id)
+log_val_pred <- data.frame(id = val$id)
+
+for (i in 1:100) {
+  
+  t_log <- sample_n(train, 52500, replace = TRUE)
+ 
+  res_log <- logistic(
+  t_log, 
+  rvar = "res1", 
+  evar = c("bizflag", "sex", "dollars", "last", "zip_fac", "owntaxprod", "version1", "upgraded"), 
+  lev = "Yes", 
+  # check = "standardize"
+)
+  
+  pred_log <- predict(res_log, pred_data = train)
+  pred_logv <- predict(res_log, pred_data = val)
+  
+  log_tr_pred <- store(log_tr_pred, pred_log, name = paste0("pred_logit", i))
+  log_val_pred <- store(log_val_pred, pred_logv, name = paste0("pred_val_logit", i))
+  
+}
+```
+
+```{r}
+saveRDS(log_tr_pred, file = "logitTr.rds", ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+
+saveRDS(log_val_pred, file = "logitVal.rds", ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+```
+
+
+```{r}
+train_lb <- data.frame(id = log_tr_pred$id, prob_log_lb = apply(log_tr_pred[, -1], 1, quantile, probs = 0.05))
+train <- train %>% 
+  left_join(train_lb, by = 'id')
+```
+
+```{r}
+val_lb <- data.frame(id = log_val_pred$id, prob_log_lb = apply(log_val_pred[, -1], 1, quantile, probs = 0.05))
+val <- val %>% 
+  left_join(val_lb, by = 'id')
+```
+
+
+```{r}
+train <- train %>% 
+  mutate(mailto_wave2 = prob_log_lb > break_even_resp)
+
+```
+
+
+```{r}
+val <- val %>% 
+  mutate(mailto_wave2 = prob_log_lb > break_even_resp)
+```
+
+
+```{r}
+perf_log_train <- perf_eval(train)
+perf_log_val <- perf_eval(val)
+```
+
+
+
+### Naive Bayes
+```{r}
+nb_res <- nb(
+  train, 
+  rvar = "res1", 
+  evar = c("bizflag", "sex", "dollars", "last", "zip_fac", "owntaxprod", "version1", "upgraded"), 
+  laplace = 1
+)
+summary(nb_res)
+```
+
+
+```{r}
+pred <- predict(nb_res, pred_data = train)
+# print(pred, n = 10)
+train <- store(train, pred, name = "pred_nb")
+```
+
+```{r}
+train <- train %>% 
+  mutate(mailto_wave2 = pred_nb > break_even_resp)
+```
+
+```{r}
+pred <- predict(nb_res, pred_data = val)
+print(pred, n = 10)
+val <- store(val, pred, name = "pred_nb")
+```
+
+```{r}
+val <- val %>% 
+  mutate(mailto_wave2 = pred_nb > break_even_resp)
+```
+
+```{r}
+perf_nb_train <- perf_eval(train)
+perf_nb_val <- perf_eval(val)
+```  
+
+
+```{r}
+perf_all <- data.frame(
+  name = c("RFM. sq", "logit. lb", "naive.Bayes"),
+  Profit = c(perf_rfm_train$profit, perf_log_train$profit, perf_nb_train$profit),
+  ROME = c(perf_rfm_val$ROME, perf_log_val$ROME, perf_nb_val$ROME)
+)
+```
+
+```{r}
+visualize(
+  perf_all,
+  xvar = "name",
+  yvar = "Profit",
+  type = "bar",
+  labs = list(title = "traing profit", x = ""),
+  custom = TRUE
+) +
+  geom_text(aes(label = format_nr(Profit, dec = 2)), vjust = 2)
+```  
+
+```{r}
+perf_val <- data.frame(
+  name = c("RFM. sq", "logit. lb", "naive.Bayes"),
+  Profit = c(perf_rfm_val$profit, perf_log_val$profit, perf_nb_val$profit),
+  ROME = c(perf_rfm_val$ROME, perf_log_val$ROME, perf_nb_val$ROME)
+)
+```
+
+```{r}
+visualize(
+  perf_val,
+  xvar = "name",
+  yvar = "Profit",
+  type = "bar",
+  labs = list(title = "Validation profit", x = ""),
+  custom = TRUE
+) +
+  geom_text(aes(label = format_nr(Profit, dec = 2)), vjust = 2)
+```  
+
+
+```{r}
+new_intuit <- rbind(train, val)
+```
+
+
+```{r fig.width = 7.54, fig.height = 21.54, dpi = 144}
+eval_class <- evalbin(
+  new_intuit, 
+  pred = c("rfm_resp", "prob_log_lb", "pred_nb"), 
+  rvar = "res1", 
+  lev = "Yes", 
+  cost = 1.41*2, 
+  margin = 60, 
+  train = "Both", 
+  data_filter = "training == 1"
+)
+summary(eval_class, prn = FALSE)
+plot(
+  eval_class, 
+  plots = c("lift", "gains", "profit", "rome"), 
+  custom = FALSE
+)
+```  
+
+
+```{r fig.width = 7, fig.height = 12.92, dpi = 144}
+eval_conf <- confusion(
+  new_intuit, 
+  pred = c("rfm_resp", "prob_log_lb", "pred_nb"), 
+  rvar = "res1", 
+  lev = "Yes", 
+  cost = 1.41*2, 
+  margin = 60, 
+  train = "Both", 
+  data_filter = "training == 1"
+)
+summary(eval_conf)
+plot(eval_conf, custom = TRUE)
+```
+
+
+
+### Neural Networks
+
+```{r}
+seed = 1234
+nn_pred_tr <- data.frame(id = train$id)
+nn_pred_val <- data.frame(id = val$id)
+
+for (i in 1:100) {
+  
+  t <- sample_n(train, 52500, replace = TRUE)
+ 
+  res_t <- nn(
+    t, 
+    rvar = "res1", 
+    evar = c("bizflag", "sex", "dollars", "last", "zip_fac", "owntaxprod", "version1", "upgraded"), 
+    lev = "Yes", 
+    size = 4,
+    seed = 1234
+    )
+  
+  pred_tr_nn <- predict(res_t, pred_data = train)
+  pred_val_nn <- predict(res_t, pred_data = val)
+  
+  nn_pred_tr <- store(nn_pred_tr, pred_tr_nn, name = paste0("trnn", i))
+  nn_pred_val <- store(nn_pred_val, pred_val_nn, name = paste0("vlnn", i))
+  
+}
+```
+
+
+```{r}
+saveRDS(nn_pred_tr, file = "NNTr.rds", ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+
+saveRDS(nn_pred_val, file = "NNVal.rds", ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+```
+
+  
+```{r}
+train_lbnn <- data.frame(id = nn_pred_tr$id, prob_nn_lb = apply(nn_pred_tr[, -1], 1, quantile, probs = 0.05))
+train <- train %>% 
+  left_join(train_lbnn, by = 'id')
+```
+
+```{r}
+val_lbnn <- data.frame(id = nn_pred_val$id, prob_nn_lb = apply(nn_pred_val[, -1], 1, quantile, probs = 0.05))
+val <- val %>% 
+  left_join(val_lbnn, by = 'id')
+```
+
+```{r}
+train <- train %>% 
+  mutate(mailto_wave2 = prob_nn_lb > break_even_resp)
+```
+
+
+```{r}
+val <- val %>% 
+  mutate(mailto_wave2 = prob_nn_lb > break_even_resp)
+```
+
+
+```{r}
+perf_nn_train <- perf_eval(train)
+perf_nn_val <- perf_eval(val)
+```
+
+
+```{r}
+
+perf_train <- data.frame(
+  name = c("RFM. sq", "logit. lb", "naive.Bayes", "NN"),
+  Profit = c(perf_rfm_train$profit, perf_log_train$profit, perf_nb_train$profit, perf_nn_train1$profit),
+  ROME = c(perf_rfm_train$ROME, perf_log_train$ROME, perf_nb_train$ROME, perf_nn_train1$ROME)
+)
+```
+
+
+```{r}
+
+perf_val <- data.frame(
+  name = c("RFM. sq", "logit. lb", "naive.Bayes", "NN"),
+  Profit = c(perf_rfm_val$profit, perf_log_val$profit, perf_nb_val$profit, perf_nn_val1$profit),
+  ROME = c(perf_rfm_val$ROME, perf_log_val$ROME, perf_nb_val$ROME, perf_nn_val1$ROME)
+)
+```
+
+```{r}
+visualize(
+  perf_train,
+  xvar = "name",
+  yvar = "Profit",
+  type = "bar",
+  labs = list(title = "Train profit", x = ""),
+  custom = TRUE
+) +
+  geom_text(aes(label = format_nr(Profit, dec = 2)), vjust = 2)
+```  
+
+
+```{r}
+visualize(
+  perf_val,
+  xvar = "name",
+  yvar = "Profit",
+  type = "bar",
+  labs = list(title = "Validation profit", x = ""),
+  custom = TRUE
+) +
+  geom_text(aes(label = format_nr(Profit, dec = 2)), vjust = 2)
+```  
+
+```{r}
+train <- train %>% 
+  mutate(zip_one = ifelse(zip_fac == 1, TRUE, FALSE))
+         
+val <- val %>% 
+   mutate(zip_one = ifelse(zip_fac == 1, TRUE, FALSE))
+```
+
+
+```{r}
+seed = 1234
+nn_pred_tr1 <- data.frame(id = train$id)
+nn_pred_val1 <- data.frame(id = val$id)
+
+for (i in 1:100) {
+  
+  t <- sample_n(train, 52500, replace = TRUE)
+ 
+  res_t <- nn(
+    t, 
+    rvar = "res1", 
+    evar = c("zip_bins", "numords", "dollars", "last", "sincepurch", "version1", "owntaxprod", "upgraded", "VI"),
+    lev = "Yes", 
+    size = 2,
+    seed = 1234
+    )
+  
+  pred_tr_nn1 <- predict(res_t, pred_data = train)
+  pred_val_nn1 <- predict(res_t, pred_data = val)
+  
+  nn_pred_tr1 <- store(nn_pred_tr1, pred_tr_nn1, name = paste0("trnn", i))
+  nn_pred_val1 <- store(nn_pred_val1, pred_val_nn1, name = paste0("vlnn", i))
+  
+}
+```
+
+
+```{r}
+train_lbnn1 <- data.frame(id = nn_pred_tr1$id, prob_nn_lb = apply(nn_pred_tr1[, -1], 1, quantile, probs = 0.05))
+train <- train %>% 
+  left_join(train_lbnn1, by = 'id')
+```
+
+```{r}
+val_lbnn1 <- data.frame(id = nn_pred_val1$id, prob_nn_lb = apply(nn_pred_val1[, -1], 1, quantile, probs = 0.05))
+val <- val %>% 
+  left_join(val_lbnn1, by = 'id')
+```
+
+```{r}
+train <- train %>% 
+  mutate(mailto_wave2 = prob_nn_lb > break_even_resp)
+```
+
+
+```{r}
+val <- val %>% 
+  mutate(mailto_wave2 = prob_nn_lb > break_even_resp)
+```
+
+
+```{r}
+perf_nn_train1 <- perf_eval(train)
+perf_nn_val1 <- perf_eval(val)
+```
+
+
+```{r}
+seed = 1234
+log_tr_pred <- data.frame(id = train$id)
+log_val_pred <- data.frame(id = val$id)
+
+for (i in 1:100) {
+  
+  t_log <- sample_n(train, 52500, replace = TRUE)
+ 
+  res_log <- logistic(
+  t_log, 
+  rvar = "res1", 
+  evar = c("last", "numords", "owntaxprod", "version1", "upgraded", "zip_one"),
+  lev = "Yes", 
+  # check = "standardize"
+)
+  
+  pred_log <- predict(res_log, pred_data = train)
+  pred_logv <- predict(res_log, pred_data = val)
+  
+  log_tr_pred <- store(log_tr_pred, pred_log, name = paste0("pred_logit", i))
+  log_val_pred <- store(log_val_pred, pred_logv, name = paste0("pred_val_logit", i))
+  
+}
+```
+
+```{r}
+# saveRDS(log_tr_pred, file = "logitTr.rds", ascii = FALSE, version = NULL,
+        # compress = TRUE, refhook = NULL)
+
+# saveRDS(log_val_pred, file = "logitVal.rds", ascii = FALSE, version = NULL,
+        # compress = TRUE, refhook = NULL)
+```
+
+
+```{r}
+train_lb <- data.frame(id = log_tr_pred$id, prob_log_lb = apply(log_tr_pred[, -1], 1, quantile, probs = 0.05))
+train <- train %>% 
+  left_join(train_lb, by = 'id')
+```
+
+```{r}
+val_lb <- data.frame(id = log_val_pred$id, prob_log_lb = apply(log_val_pred[, -1], 1, quantile, probs = 0.05))
+val <- val %>% 
+  left_join(val_lb, by = 'id')
+```
+
+
+```{r}
+train <- train %>% 
+  mutate(mailto_wave2 = prob_log_lb > break_even_resp)
+
+```
+
+
+```{r}
+val <- val %>% 
+  mutate(mailto_wave2 = prob_log_lb > break_even_resp)
+```
+
+
+```{r}
+perf_log_train <- perf_eval(train)
+perf_log_val <- perf_eval(val)
+```
+
+
+#### From Org.BE
+```{r}
+set.seed(1234)
+
+nn_pred_tr <- data.frame(id = train$id)
+nn_pred_val <- data.frame(id = val$id)
+
+for (i in 1:100) {
+  
+  t <- sample_n(train, 52500, replace = TRUE)
+ 
+  res_t <- nn(
+    t, 
+    rvar = "res1", 
+    evar = c("VI", "numords", "last", "version1", "owntaxprod", "upgraded"),
+    lev = "Yes", 
+    size = 2,
+    seed = 1234
+    )
+  
+  pred_tr_nn <- predict(res_t, pred_data = train)
+  pred_val_nn <- predict(res_t, pred_data = val)
+  
+  nn_pred_tr <- store(nn_pred_tr, pred_tr_nn, name = paste0("trnn", i))
+  nn_pred_val <- store(nn_pred_val, pred_val_nn, name = paste0("vlnn", i))
+  
+}
+```
+
+
+```{r}
+saveRDS(nn_pred_tr, file = "NNTr.rds", ascii = FALSE, version = NULL,
+       compress = TRUE, refhook = NULL)
+
+saveRDS(nn_pred_val, file = "NNVal.rds", ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+```  
+
+
+```{r}
+set.seed(1234)
+
+nn_pred_tr <- data.frame(id = train$id)
+nn_pred_val <- data.frame(id = val$id)
+
+for (i in 1:100) {
+  
+  t <- sample_n(train, 52500, replace = TRUE)
+ 
+  res_t <- nn(
+    t, 
+    rvar = "res1", 
+    evar = c("VI", "numords", "last", "version1", "owntaxprod", "upgraded"),
+    lev = "Yes", 
+    size = 2,
+    seed = 1234
+    )
+  
+  pred_tr_nn <- predict(res_t, pred_data = train)
+  pred_val_nn <- predict(res_t, pred_data = val)
+  
+  nn_pred_tr <- store(nn_pred_tr, pred_tr_nn, name = paste0("trnn", i))
+  nn_pred_val <- store(nn_pred_val, pred_val_nn, name = paste0("vlnn", i))
+  
+}
+```
+
+
+```{r}
+saveRDS(nn_pred_tr, file = "NNTr.rds", ascii = FALSE, version = NULL,
+       compress = TRUE, refhook = NULL)
+
+saveRDS(nn_pred_val, file = "NNVal.rds", ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+```
+
