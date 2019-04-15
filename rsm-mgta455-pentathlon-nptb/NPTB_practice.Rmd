@@ -1,0 +1,375 @@
+
+
+```{r include=FALSE}
+## Loading the data from Dropbox/MGTA455-2019/data/
+pentathlon_nptb <- readr::read_rds(file.path(radiant.data::find_dropbox(), "MGTA455-2019/data/pentathlon_nptb.rds"))
+```
+
+## Question answers
+
+```{r include=FALSE}
+library(radiant)
+library(tidyverse)
+library(caret)
+library(ranger)
+library(keras)
+library(gbm)
+```
+
+
+
+```{r}
+## create new variable(s)
+pentathlon_nptb <- mutate(pentathlon_nptb, cweight = ifelse(buyer == "yes", 1L, 99L))
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'endurance'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_endurance")
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'strength'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_strength")
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'water'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_water")
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'team'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_team")
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'backcountry'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_backcountry")
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'winter'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_winter")
+```
+
+```{r fig.width = 7, fig.height = 25.85, dpi = 144}
+result <- logistic(
+  pentathlon_nptb, 
+  rvar = "buyer", 
+  evar = c(
+    "message", "age", "gender", "income", "education", "children", 
+    "freq_endurance", "freq_strength", "freq_water", "freq_team", 
+    "freq_backcountry", "freq_winter", "freq_racquet"
+  ), 
+  lev = "yes", 
+  int = c(
+    "message:age", "message:gender", 
+    "message:income", "message:education", 
+    "message:children", "message:freq_endurance", 
+    "message:freq_strength", 
+    "message:freq_water", 
+    "message:freq_team", 
+    "message:freq_backcountry", 
+    "message:freq_winter", 
+    "message:freq_racquet"
+  ), 
+  wts = "cweight", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(result)
+plot(result, plots = "coef", custom = FALSE)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'racquet'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "pred_logit_racquet")
+```
+
+```{r}
+## filter and sort the dataset
+pentathlon_nptb <- pentathlon_nptb %>%
+  filter(training == 1) %>%
+  select(custid:pred_logit_random)
+register("pentathlon_nptb", "pentathlon_nptb")
+# dtab(pentathlon_nptb, dec = 2, nr = 100) %>% render()
+```
+
+```{r}
+## create new variable(s)
+pentathlon_nptb <- mutate(pentathlon_nptb, logit_to_offer = c("endurance", "strength", "water", "team", "backcountry", "winter", "racquet")[which.pmax(pred_logit_endurance, pred_logit_strength,	pred_logit_water, pred_logit_team, pred_logit_backcountry, pred_logit_winter, pred_logit_racquet)])
+```
+
+```{r fig.width = 8.08, fig.height = 4.31, dpi = 144}
+result <- pivotr(
+  pentathlon_nptb, 
+  cvars = "logit_to_offer", 
+  normalize = "total", 
+  tabsort = "desc(n_obs)", 
+  nr = 7
+)
+summary(result, perc = TRUE)
+plot(result, perc = TRUE, flip = TRUE)
+# dtab(result, perc = TRUE) %>% render()
+```
+
+
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'endurance'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_endurance")
+```
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'strength'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_strength")
+```
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'water'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_water")
+```
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'team'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_team")
+```
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'backcountry'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_backcountry")
+```
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'winter'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_winter")
+```
+
+```{r}
+result <- regress(
+  pentathlon_nptb, 
+  rvar = "total_os", 
+  evar = c("message", "age", "gender", "income", "education", "children"), 
+  check = "standardize", 
+  data_filter = "training == 1&buyer == 'yes'"
+)
+summary(result)
+pred <- predict(result, pred_data = pentathlon_nptb, pred_cmd = "message = 'racquet'")
+print(pred, n = 10)
+pentathlon_nptb <- store(pentathlon_nptb, pred, name = "predict_reg_racquet")
+```
