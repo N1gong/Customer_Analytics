@@ -1,0 +1,320 @@
+
+```{r}
+library(tidyverse)
+library(radiant)
+library(randomForest)
+library(xgboost)
+library(zipcode)
+```  
+
+
+```{r}
+intuit <- read_rds('intuit75k.rds')
+data("zipcode")
+```
+
+
+### Clean up Zipcode  
+
+```{r}
+intuit <- intuit %>% 
+  left_join(zipcode, by = 'zip') %>% 
+  select(., -c(17, 18))
+
+intuit <- intuit %>% 
+  mutate(zip801 = ifelse(zip == '00801', TRUE, FALSE),
+         zip804 = ifelse(zip == '00804', TRUE, FALSE))
+
+#intuit$version1 <- factor(intuit$version1)
+#intuit$owntaxprod <- factor(intuit$owntaxprod)
+#intuit$upgraded <- factor(intuit$upgraded)
+intuit$zip_bins <- factor(intuit$zip_bins)
+
+train <- intuit %>% 
+  filter(training == 1) %>% 
+  select(res1, zip_bins, numords, dollars, last, sincepurch, version1, owntaxprod, upgraded, zip801, zip804)
+
+val <- intuit %>% 
+  filter(training == 0) %>% 
+  select(res1, zip_bins, numords, dollars, last, sincepurch, version1, owntaxprod, upgraded, zip801, zip804)
+```  
+
+
+Function for Calculating Profit
+```{r}
+break_even <- 1.41/60
+
+perf_profit <- function(df) {
+  
+  dat <- filter(df, mailto == TRUE)
+  
+  nummail <- sum(df$mailto == TRUE)
+  mailcost <- nummail * 1.41
+  
+  profit <- sum(dat$res1 == 'Yes')  * 60 - mailcost
+  profit
+
+}
+```  
+
+shuffle training data  
+
+```{r}
+set.seed(1234)
+train <- train[sample(nrow(train)), ]
+```
+
+### Create Grid Search Hyperparameter for Random Forest  
+
+```{r}
+# Establish a list of possible values for minsplit and maxdepth
+mtry <- seq(4, 8, 1)
+ntree <- c(501, 511, 521, 531, 541)
+
+# Create a data frame containing all combinations 
+RF_grid <- expand.grid(mtry = mtry, ntree = ntree)
+
+# Check out the grid
+head(RF_grid)
+
+# Print the number of grid combinations
+nrow(RF_grid)
+```  
+
+
+### Train RF
+
+```{r}
+# Number of potential models in the grid
+num_models <- nrow(RF_grid)
+
+# Create an empty list to store models
+RF_models <- list()
+
+# Write a loop over the rows of hyper_grid to train the grid of models
+for (i in 1:num_models) {
+
+    mtry <- RF_grid$mtry[i]
+    ntree <- RF_grid$ntree[i]
+    
+    RF_models[[i]] <- randomForest(formula = res1 ~ ., 
+                               data = train, 
+                               mtry = mtry,
+                               ntree = ntree,
+                               replace=TRUE,
+                               importance=TRUE
+                               )
+}
+
+saveRDS(RF_models, "RFnocv.rds")
+```
+
+
+
+### Find best model Test Val
+```{r}
+
+num_models <- length(RF_models)
+
+# Create an empty vector to store RMSE values
+profit_rf_values <- c()
+
+# Write a loop over the models to compute validation RMSE
+for (i in 1:num_models) {
+  
+  # test_indx <- hyper_grid$ind[[i]]
+
+  mod <- RF_models[[i]]
+
+  pred <- predict(object = mod,
+                    newdata = val,
+                    type = 'prob')
+  
+  profit_rf_values[i] <- perf_profit(data.frame(res1 = val$res1, mailto = pred[,1] > break_even*2))
+    
+}
+
+
+max(profit_rf_values)
+which.max(profit_rf_values)       ## 20
+RF_models[[25]]
+
+```  
+
+
+
+### NN 5 fold cv  
+
+```{r}
+## Create grid search
+size <- seq(2, 10, 2)
+decay <- c(0.1, 0.3, 0.5, 1, 1.15)
+#decayx <- c(0.1, 0.5, 1, , 1.5)
+#test <- list(f1, f2, f3, f4, f5)
+
+nn_grid <- expand.grid(size = size, decay = decay)
+# nn_gridx <- expand.grid(size = size, decay = decayx, indx = test)
+# Print the number of grid combinations
+nrow(nn_grid)
+
+#set.seed(1234)
+num_NN_model <- nrow(nn_grid)
+NN_models <- list()
+
+for (i in 1:num_NN_model) {
+  
+  size <- nn_grid$size[i]
+  decay <- nn_grid$decay[i]
+  
+  NN_models[[i]] <- nn(
+    train, 
+    rvar = "res1", 
+    evar = c('zip_bins', 'numords', 'dollars', 'last', 'sincepurch', 'version1', 'owntaxprod', 'upgraded', 'zip801', 'zip804'),
+    lev = "Yes", 
+    size = size,
+    decay = decay,
+    seed = 1234 
+    )
+  
+}
+
+saveRDS(NN_models, "NNnocv.rds")
+```  
+
+### Test
+```{r}
+
+num_models <- length(NN_models)
+
+profit_nn_values <- c()
+
+for (i in 1:num_models){
+ 
+  mod <- NN_models[[i]]
+
+  pred_tr_nn <- predict(mod, pred_data = val)
+  
+  
+  
+  profit_nn_values[i] <- perf_profit(tibble(res1=val$res1, mailto = pred_tr_nn$Prediction > break_even*2))
+  
+}
+
+which.max(profit_nn_values)    ## 18
+
+NN_models[[18]]     # 28-6-1 decay=1
+```  
+
+
+
+### XGBoosting
+
+#### Using hold out method to train models
+
+```{r}
+train_xgb <- train
+val_xgb <- val
+
+#using one hot encoding 
+labels <- ifelse(train_xgb$res1 == 'Yes', 1, 0)
+ts_label <- ifelse(val_xgb$res1 == 'Yes', 1, 0)
+
+new_tr <- model.matrix(~.+0,data = train_xgb[,-1])
+new_ts <- model.matrix(~.+0,data = val_xgb[,-1])
+
+#preparing matrix 
+dtrain <- xgb.DMatrix(data = new_tr,label = labels) 
+dtest <- xgb.DMatrix(data = new_ts,label = ts_label)
+```  
+
+
+```{r}
+pos_rate <- function(y_pred, dtrain){
+  y_true <- getinfo(dtrain, "label")
+  pos <- as.numeric(sum(y_pred > break_even*2) / sum(y_true))
+  # y_true <- ifelse(y_true == 1, 'Yes', 'No')
+  return(list(metric = "pos_rate", value = pos))
+  
+}
+#default parameters
+# paramsX<- list(booster = "gbtree", objective = "binary:logistic", eta=0.05, gamma=0, max_depth=10, min_child_weight=1, subsample=1, colsample_bytree=1, scale_pos_weight=20)
+
+# xgbcv <- xgb.cv( params = paramsX, data = dtrain, nrounds = 100, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20, maximize = T, disable_default_eval_metric = 0, feval = pos_rate)
+```  
+
+```{r}
+params <- list(booster = "gbtree", objective = "binary:logistic", eta=0.01, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+
+xgb.cv( params = params, data = dtrain, nrounds = 100, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20, maximize = F)
+```
+
+
+
+### Create hyper-grid for XGB model
+
+```{r}
+eta <- c(0.05, 0.1, 0.5, 1, 1.15)
+max_depth <- seq(6, 22, 4)
+subsample <- seq(0.2, 1, 0.2)
+colsample_bytree <- seq(0.6, 1, 0.1)
+
+XGB_grid <- expand.grid(eta = eta, max_depth = max_depth, subsample = subsample, colsample_bytree = colsample_bytree)
+
+num_XGB_models <- nrow(XGB_grid)
+XGB_models <- list()
+
+
+for (i in 1:num_XGB_models){
+  eta <- XGB_grid$eta[i]
+  max_depth <- XGB_grid$max_depth[i]
+  subsample <- XGB_grid$subsample[i]
+  colsample_bytree <- XGB_grid$colsample_bytree[i]
+  
+  params <- list(booster = "gbtree", objective = "binary:logistic", eta=eta, gamma=0, max_depth=max_depth, min_child_weight=1, subsample=subsample, colsample_bytree=colsample_bytree, scale_pos_weight=20)
+  
+  XGB_models[[i]] <- xgb.train(params = params, data = dtrain, nrounds = 40)
+  
+}
+saveRDS(XGB_models, 'XGBnocv.rds')
+
+
+## Test on Val
+
+num_models <- length(XGB_models)
+
+profit_xgb_values <- c()
+
+for (i in 1:num_models){
+ 
+  mod <- XGB_models[[i]]
+
+  pred_tr_xgb <- predict(mod, dtest)
+  profit_xgb_values[i] <- perf_profit(tibble(res1=ifelse(ts_label == 1, 'Yes', 'No'), mailto = pred_tr_xgb > break_even*2))
+  
+}
+# browseURL('https://www.youtube.com/watch?v=QH2-TGUlwu4')
+#which.max(profit_xgb_values)
+which.max(profit_xgb_values)
+XGB_models[[417]]
+
+```  
+
+## Ensembel  
+
+```{r}
+val_pred <- cbind(rf_pred = pred[,1], nn_pred = pred_val_nn$Prediction, nnx_pred = pred_val_nnx$Prediction, xgb_pred = pred_val_xgb)
+
+val$all_prob <- mean_prob
+
+```
+
+
+```{r}
+val <- val %>% 
+  mutate(mailto = ifelse(mean_prob > break_even*2, TRUE, FALSE))
+
+perf_profit(val)       ## 37062.06
+```
+
+
+

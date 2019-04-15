@@ -1,0 +1,215 @@
+---
+title: "Untitled"
+author: "Zheng Shan"
+date: "2/17/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+title: Intuit Trees and Nets
+output: html_document
+---
+
+* Team-lead GitLab id:
+* Group number:
+* Group name:
+* Team member names:
+
+```{r r_setup, include = FALSE}
+## initial settings
+knitr::opts_chunk$set(
+  comment = NA,
+  echo = TRUE,
+  error = TRUE,
+  cache = FALSE,
+  message = FALSE,
+  dpi = 144,
+  warning = FALSE
+)
+
+## width to use when printing tables etc.
+options(
+  width = 250,
+  scipen = 100,
+  max.print = 5000,
+  stringsAsFactors = FALSE
+)
+
+## load radiant packages if needed
+if (!exists("r_environment")) library(radiant)
+```
+
+
+
+```{r}
+## loading the data. Note that data must be loaded from the data/
+## in the rstudio project directory
+intuit75k <- readr::read_rds(file.path(radiant.data::find_dropbox(), "MGTA455-2019/data/intuit75k.rds"))
+
+library(randomForest)
+library(caret)
+library(xgboost)
+```
+
+```{r}
+## variable preparation
+intuit75k <- intuit75k %>%
+  mutate(numords_v1 = numords * version1, last_v1 = last * version1, 
+         zip801 = ifelse(zip == '00801', TRUE, FALSE),
+         zip804 = ifelse(zip == '00804', TRUE, FALSE),
+         zip_bins = as.factor(zip_bins))
+
+train <- intuit75k %>%
+  filter(training == 1) 
+#%>%
+ # select(res1, zip_bins, numords, dollars, last, version1, owntaxprod, upgraded, zip801, zip804, numords_v1, last_v1)
+
+test <- intuit75k %>%
+  filter(training == 0)
+breakeven <- 1.41/60
+
+```
+
+```{r}
+## 
+res_A <- logistic(
+  train, 
+  rvar = "res1", 
+  evar = c('zip_bins', 'numords', 'dollars', 'last', 'version1', 'owntaxprod', 'upgraded', 'zip801', 'zip804', 'numords_v1', 'last_v1'),
+  lev = "Yes", 
+)
+summary(res_A)
+
+```
+
+
+```{r}
+## random forest
+
+fit <- randomForest(res1 ~ zip_bins + numords + dollars + last + version1 + owntaxprod + upgraded + zip801 + zip804 + numords_v1 + last_v1, data = train, ntree = 500)
+
+prediction <- predict(fit, filter(intuit75k, training == 0), type = "prob")
+prediction <- tbl_df(prediction)
+
+test$malito <- prediction$Yes > breakeven
+
+
+60*sum(filter(test,malito == TRUE)$res1 == "Yes") - 1.41*sum(test$malito == TRUE)
+
+```
+
+
+```{r}
+## XGBoost 37217.22
+train <- filter(intuit75k, training == 1)
+# train <- filter(intuit75k, training == 1)
+
+train_label <- ifelse(train$res1 == "Yes", TRUE, FALSE)
+
+test_label <- ifelse(test$res1 == "Yes", TRUE, FALSE)
+
+
+train_data <- select(train, c("zip_bins", "numords" , "dollars" , "last"  , "version1" , "owntaxprod" , "upgraded", 'zip801', 'zip804', 'numords_v1', 'last_v1'))
+
+test_data <- select(test, c("zip_bins", "numords" , "dollars" , "last"  , "version1" , "owntaxprod" , "upgraded", 'zip801', 'zip804', 'numords_v1', 'last_v1'))
+
+
+
+train_data <- data.matrix(train_data)
+test_data <- data.matrix(test_data)
+
+dtrain <- xgb.DMatrix(data = train_data, label= train_label)
+dtest <- xgb.DMatrix(data = test_data, label = test_label)
+
+model <- xgboost(data = dtrain, # the data   
+                 nround = 15, # max number of boosting iterations
+                 objective = "binary:logistic", gamma = 5) 
+
+pred <- predict(model, dtest)
+
+
+test$malito <- pred > breakeven
+
+
+60*sum(filter(test,malito == TRUE)$res1 == "Yes") - 1.41*sum(test$malito == TRUE)
+# 38030.7
+
+parameter <- expand.grid(nrounds = 20:30, eta = seq(0.2,0.7, 0.1), gamma = 5:20)
+
+
+params <- list(
+  objective = "binary:logistic",
+  eta = 0.3,
+  max_depth = 4
+)
+
+
+cv.nround <- 11
+cv.nfold <- 5
+mdcv <-xgb.cv(data = dtrain, params = params,nthread=6,nfold = cv.nfold,nrounds = cv.nround,verbose = T, eval_metric = "auc")
+
+arrange(mdcv$evaluation_log, desc(test_auc_mean))[1, ]
+
+xgb <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 75,
+  watchlist = list(val = dtest, train = dtrain),
+  print_every_n = 10,
+  eval_metric = "auc"
+)
+
+
+pred <- predict(xgb, dtest)
+
+test$malito <- pred > breakeven
+
+
+60*sum(filter(test,malito == TRUE)$res1 == "Yes") - 1.41*sum(test$malito == TRUE)
+
+
+
+
+
+```
+
+```{r}
+# decision tree
+
+
+```
+
+```{r}
+## decison tree 36835
+result_dt <- crtree(
+  train, 
+  rvar = "res1", 
+  evar = c(
+    "zip_bins", "numords", "dollars", "last", "version1", 
+    "owntaxprod", "upgraded", "zip801", "zip804"
+  ), 
+  type = "classification", 
+  lev = "Yes", 
+  cp = 0.006, 
+  cost = 1.41, 
+  margin = 60
+)
+summary(result_dt, prn = TRUE)
+pred <- predict(result_dt, pred_data = test)
+print(pred, n = 10)
+test <- store(test, pred, name = "pred_crtree")
+
+
+#cv.crtree(result_dt, fun = auc
+cv.crtree(result_dt, fun = profit, cost = 1.41, margin = 60)
+
+
+test['mailto_dt']<- ifelse(test$pred_crtree>=breakeven, T, F)
+profit_dt <- sum(test$mailto_dt ==T & test$res1 == "Yes")*60 -sum(test$mailto_dt == T)*1.41
+```
+
+
