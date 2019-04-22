@@ -4,10 +4,6 @@ output: html_document
 ---
 
 * Team-lead gitlab id: rsm-n1gong
-* Team-lead gitlab username: Nawen Gong
-* Group number: 12
-* Group name: Team 12
-* Team member names: Nawen Gong, Zichen Huang, Xinyue Tao, Zheng Shan
 
 ```{r r_setup, include = FALSE}
 ## initial settings
