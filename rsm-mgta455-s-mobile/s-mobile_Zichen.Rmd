@@ -1,0 +1,308 @@
+---
+title: "s-mobile_Zichen"
+author: "Zichen_Huang"
+date: "2/28/2019"
+output: html_document
+---
+
+```{r r_setup, include = FALSE}
+## initial settings
+knitr::opts_chunk$set(
+  comment = NA,
+  echo = TRUE,
+  error = TRUE,
+  cache = FALSE,
+  message = FALSE,
+  dpi = 96,
+  warning = FALSE
+)
+
+## width to use when printing tables etc.
+options(
+  width = 250,
+  scipen = 100,
+  max.print = 5000,
+  stringsAsFactors = FALSE
+)
+
+## load radiant packages if neededi
+if (!exists("r_environment")) library(radiant)
+```
+
+
+```{r}
+## Loading the data from Dropbox
+s_mobile <- readr::read_rds(file.path(radiant.data::find_dropbox(), "MGTA455-2019/data/s_mobile.rds"))
+```
+
+
+## Question answers
+
+> Churn Managemnet Steps:
+  STEP 1: Develop a model to predict customer churn
+  STEP 2: Use model output to understand the main drivers of churn
+  STEP 3: Use insights on churn drivers to develop actions/offers/incentives
+  STEP 4: Quantify the impact of these actions/offers/incentives on the probability of churn
+  STEP 5: Decide which actions/offers/incentives to target to which customers
+  STEP 6: Evaluate the economics
+
+
+### Preperation
+```{r}
+## split sample sets
+train <- filter(s_mobile, training == 1)
+val <- filter(s_mobile, training == 0)
+reps <- filter(s_mobile, representative == 1)
+```
+
+
+### STEP 1: Develop a model to predict customer churn
+
+```{r}
+## list response (rvar), explanatory (evar)  and interaction (int) variables
+rvar <- "churn"
+
+evar <- c("changer","changem", "revenue", "mou", "overage", "roam", "conference",
+          "months", "uniqsubs", "custcare", "retcalls", "dropvce", "eqpdays", 
+          "refurb", "smartphone", "highcreditr", "mcycle", "car", "travel", "region",
+          "occupation")
+
+lev <- "yes"
+```
+
+```{r}
+## scale the predicated churn probabilities
+p_adj <- function(p) {
+  p_adj <- p / (p + (1 - p) * (1 - 0.02) / 0.02) 
+  return(p_adj)
+}
+```
+
+```{r}
+## create logistic model
+result <- logistic(
+  s_mobile,  
+  rvar = rvar,  
+  evar = evar,  
+  lev = lev, 
+  data_filter = "training == 1"
+)
+summary(result)
+```
+
+```{r}
+## predict churn rate for train/val/rep
+pred <- predict(result, pred_data = train)
+train <- store(train, pred, name = "p_churn")
+
+pred <- predict(result, pred_data = val)
+val <- store(val, pred, name = "p_churn")
+
+pred <- predict(result, pred_data = reps)
+reps <- store(reps, pred, name = "p_churn") %>% mutate(p_churn = p_adj(p_churn))
+```
+
+
+### STEP 2: Use model output to understand the main drivers of churn
+
+> 1) Select statistically significant variables (p < 0.1)
+> 2) For numeric and integer variables: calcualte the effect for a two standard deviation change in a variable (X = OR ^ (2*sd)), if X > 1, the importance = X; if X < 1, the importance = 1/X.
+> 3) For dummy/categorical variables: if OR > 1, the importance = OR; if OR < 1, the importance = 1/OR.
+
+
+```{r}
+## get the table showing all the variables and their statistics
+evar_tab <- result %>% 
+  write.coeff(sort = TRUE) %>%
+  format_df(dec = 3)
+```
+
+```{r}
+## select statistically significant variables (p < 0.1)
+evar_tab <- evar_tab %>%
+  filter(p.value < 0.1) 
+
+## for numeric and integer variables: calcualte X = OR ^ (2*sd) and 1/X
+evar_numeric <- evar_tab %>%
+  filter(dummy == "0.000") %>%
+  mutate(X = as.numeric(OR) ^ (2*as.numeric(sd))) %>%
+  mutate("1/X" = as.numeric(1/X)) %>%
+  mutate(importance = pmax(X, 1/X)) %>%
+  format_df(dec = 3)
+
+## for dummy/categorical variables:
+evar_dummy <- evar_tab %>%
+  filter(dummy == "1.000") 
+```
+
+```{r}
+## get the final evar_importance table
+evar_importance <- full_join(evar_dummy, evar_numeric, by = c("label", "OR", "coefficient", "std.error", "z.value", "p.value", "sig_star", "dummy", "mean", "sd", "min", "max", "importance")) %>%
+  arrange(desc(importance))
+```
+
+
+### STEP 3: Use insights on churn drivers to develop actions/offers/incentives
+
+> In the s-mobile case, we choose predictors that are in top 5 (or 10) in terms of importance and that are actionable.
+
+```{r}
+## select the top 15 predictors in terms of importance and that are actionable
+evar_top10 <- evar_importance %>%
+  select(label, importance, coefficient, dummy, OR, mean, sd) %>%
+  slice(1:10) 
+```
+
+
+################################## Plan 1 ###########################################
+### STEP 4: Quantify the impact of these actions/offers/incentives on the probability of churn
+
+## 1) Driver: "overage"
+```{r}
+overage_dat <- mutate(reps, overage = overage - 20)
+pred <- predict(result, pred_data = overage_dat)
+overage_dat <- store(overage_dat, pred, name = "p_churn_new") %>% mutate(p_churn_new = p_adj(p_churn_new))
+
+bchurn_rate <- mean(overage_dat$p_churn)
+pchurn_rate <- mean(overage_dat$p_churn_new)
+```
+
+
+
+### STEP 5: Decide which actions/offers/incentives to target to which customers
+
+## Churn Management Plan 1:
+> Driver: "overage"
+  Action: Offer overage minutes refund (upper limit : 20 minutes/month, the average revenue/minute is 0.05 SGD)
+  Targeting Rule: None, affects all customers
+  Expected churn benefit: Baseline churn 2%, projected churn 1.84%
+
+
+
+### STEP 6: Evaluate the economics
+```{r}
+## Assumptions
+rev_minute <- 0.05
+revenue <- mean(reps$revenue)
+revenue_new <- revenue - 20 * rev_minute
+
+month <- 1:60
+cogs <- 0.2
+mdiscount <- 0.008
+```
+
+```{r}
+## create CLV functions
+clv <- function(churn_rate, revenue, maction_cost){
+  month <- 1:60
+  cogs <- 0.2
+  mdiscount <- 0.008
+  
+  product_cost <- revenue * cogs
+  profit <- revenue - product_cost - maction_cost
+  
+  churn_rate <- c(0, rep(churn_rate, 59))
+  prob_sub <- cumprod(1 - churn_rate)
+  exp_profit <- profit * prob_sub
+  pv_profit <- exp_profit/(1 + mdiscount)^(month - 0.5)
+  CLV <- sum(pv_profit)
+  
+  return(CLV)
+}
+```
+
+```{r}
+## calculate baseline_clv, projected_clv and their difference
+baseline_clv <- clv(bchurn_rate, revenue, 0)
+projected_clv <- clv(pchurn_rate, revenue_new, 0)
+diff <- projected_clv - baseline_clv
+
+## calculate the monthly action/offer/incentive cost
+maction_cost <- diff/sum((1/((1+0.008)^seq(0.5, 59.5, 1)))*cumprod(1 - c(0, rep(pchurn_rate, 59))))
+# new_projected_clv <- clv(pchurn_rate,0.68)
+```
+The result indicates that s-mobile can spend up to 20.67 SGD per subscriber, which is 0.68 SGD per subscriber per month.
+
+
+################################## Plan 2 ###########################################
+### STEP 4: Quantify the impact of these actions/offers/incentives on the probability of churn
+
+## 2) Driver: "eqpdays"
+```{r}
+eqpdays_mean <- mean(reps$eqpdays)
+focus_dat <- reps %>% filter(p_churn > 0.02, eqpdays > eqpdays_mean)
+focus_dat$eqpdays <- 326
+
+pred1 <- predict(result, pred_data = focus_dat)
+focus_dat <- store(focus_dat, pred1, name = "p_churn_new") %>% mutate(p_churn_new = p_adj(p_churn_new))
+
+bchurn_rate <- mean(focus_dat$p_churn)
+pchurn_rate <- mean(focus_dat$p_churn_new)
+```
+
+### STEP 5: Decide which actions/offers/incentives to target to which customers
+
+## Churn Management Plan 2:
+> Driver: "eqpdays"
+  Action: Offer a new equipment (cellphone) for target customers
+  Targeting Rule: customers has above average total churn probability AND customers has above eqpdays.
+  Expected churn benefit: Baseline churn 3.45%, projected churn 2.49%
+
+
+### STEP 6: Evaluate the economics
+
+```{r}
+## Assumptions
+revenue <- mean(focus_dat$revenue)
+month <- 1:60
+cogs <- 0.2
+mdiscount <- 0.008
+```
+
+```{r}
+## calculate baseline_clv, projected_clv and their difference
+baseline_clv <- clv(bchurn_rate, revenue, 0)
+projected_clv <- clv(pchurn_rate, revenue, 0)
+diff <- projected_clv - baseline_clv
+```
+The result indicates that s-mobile can spend up to 180 SGD per subscriber. So we can maximizely spend 180 SGD/person to offer a new cellphone for those targeted customers. 
+
+
+################################## Plan 3 ###########################################
+### STEP 4: Quantify the impact of these actions/offers/incentives on the probability of churn
+
+## 3) Driver: "region"
+```{r}
+region_CS <- filter(reps, region == "CS")
+bchurn_rate <- mean(region_CS$p_churn)
+
+region_other <- filter(reps, region == c("SW", "NE", "NW"))
+pchurn_rate <- mean(region_other$p_churn)
+```
+
+
+### STEP 5: Decide which actions/offers/incentives to target to which customers
+
+## Churn Management Plan 3:
+> Driver: "eqpdays"
+  Action: Build new communication equipments in the CS region
+  Targeting Rule: customers in the CS region.
+  Expected churn benefit: Baseline churn 2.7%, projected churn 1.8%
+
+### STEP 6: Evaluate the economics
+
+```{r}
+## Assumptions
+revenue <- mean(region_CS$revenue)
+month <- 1:60
+cogs <- 0.2
+mdiscount <- 0.008
+```
+
+```{r}
+## calculate baseline_clv, projected_clv and their difference
+baseline_clv <- clv(bchurn_rate, revenue, 0)
+projected_clv <- clv(pchurn_rate, revenue, 0)
+diff <- projected_clv - baseline_clv
+```
+The result indicates that s-mobile can spend up to 241 SGD per subscriber. So we can maximizely spend 241 SGD/person to build new communication equipments in the CS region.

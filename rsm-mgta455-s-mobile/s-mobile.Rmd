@@ -1,0 +1,471 @@
+---
+title: "S-Mobile: Predicting Customer Churn"
+output: html_document
+---
+
+* Team-lead gitlab id: rsm-n1gong
+* Group number: 12
+* Group name: Team 12
+* Team member names:  Nawen Gong, Xinyue Tao, Zichen Huang, Zheng Shan
+
+```{r r_setup, include = FALSE}
+## initial settings
+knitr::opts_chunk$set(
+  comment = NA,
+  echo = TRUE,
+  error = TRUE,
+  cache = FALSE,
+  message = FALSE,
+  dpi = 96,
+  warning = FALSE
+)
+
+## width to use when printing tables etc.
+options(
+  width = 250,
+  scipen = 100,
+  max.print = 5000,
+  stringsAsFactors = FALSE
+)
+
+## load radiant packages if neededi
+if (!exists("r_environment")) library(radiant)
+```
+
+<style>
+.table {
+  width: auto;
+}
+ul, ol {
+  padding-left: 18px;
+}
+pre, code, pre code {
+  overflow: auto;
+  white-space: pre;
+  word-wrap: normal;
+  background-color: #ffffff;
+}
+</style>
+
+## Setup
+
+Please complete this R-markdown document by answering the questions in `s-mobile.pdf` on Dropbox (week9/readings/). The code block below will load the data you will need. Please DO NOT change the code used to load the data. Create an HTML file with all your results and comments and push both the Rmarkdown and HTML file to GitLab when you are done. All analysis results MUST be reproducible (i.e., the TA and I must be able to recreate the HTML from the R-markdown file without changes or errors). Upload all files to GitLab.
+
+```{r include=FALSE}
+library(tidyverse)
+library(xgboost)
+library(caret)
+library(ranger)
+
+## Loading the data from Dropbox
+s_mobile <- readr::read_rds(file.path(radiant.data::find_dropbox(), "MGTA455-2019/data/s_mobile.rds"))
+
+## split sample sets
+train <- filter(s_mobile, training == 1)
+val <- filter(s_mobile, training == 0)
+reps <- filter(s_mobile, representative == 1)
+```
+
+
+## Question answers
+
+> In this analysis, we'll provide useful and actionable advices for S-Mobile to proactively retain customers. We conduct the churn management analysis using the following steps:  
+* STEP 1: Develop a model to predict customer churn
+* STEP 2: Use model output to understand the main drivers of churn
+* STEP 3: Use insights on churn drivers to develop actions/offers/incentives
+* STEP 4: Quantify the impact of these actions/offers/incentives on the probability of churn
+* STEP 5: Decide which actions/offers/incentives to target to which customers
+* STEP 6: Evaluate the economics
+
+
+## STEP 1: Develop a model to predict customer churn
+
+#### In this section, we'll evaluate the logistic model, together with Nerual Network, Ranger and XGBoost to explore the best model possible in our prediction. 
+&nbsp;
+&nbsp;  
+
+*Model Evaluation Dataframe*
+
+```{r echo=FALSE}
+## setup a tibble to use for evaluation
+eval_dat <- tibble::tibble(
+  churn = s_mobile$churn, 
+  training = s_mobile$training
+)
+head(eval_dat)
+```  
+&nbsp;
+&nbsp;  
+
+
+### Logistic Model  
+
+&nbsp;
+```{r echo=FALSE}
+logit_res <- logistic(
+  s_mobile, 
+  rvar = "churn", 
+  evar = c(
+    "changer", "changem", "revenue", "mou", "overage", "roam", 
+    "conference", "months", "uniqsubs", "custcare", "retcalls", 
+    "dropvce", "eqpdays", "refurb", "smartphone", "highcreditr", 
+    "mcycle", "car", "travel", "region", "occupation"
+  ), 
+  # int = c("highcreditr:travel", "travel:occupation"),
+  lev = "yes", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(logit_res)
+```  
+
+```{r echo=FALSE}
+eval_dat$logit <- predict(logit_res, s_mobile)$Prediction
+```  
+&nbsp;
+&nbsp;  
+
+
+### Nerual Network Model
+
+#### We start with 3 nodes and the default learning rate of 0.5 then tuning the model using cross valadation.  
+
+&nbsp;
+&nbsp; 
+```{r echo=FALSE}
+res_nn <- nn(
+  s_mobile, 
+  rvar = "churn", 
+  evar = c(
+    "changer", "changem", "revenue", "mou", "overage", "roam", 
+    "conference", "months", "uniqsubs", "custcare", "retcalls", 
+    "dropvce", "eqpdays", "refurb", "smartphone", "highcreditr", 
+    "mcycle", "car", "travel", "region", "occupation"
+  ), 
+  lev = "yes", 
+  size = 3, 
+  seed = 1234, 
+  data_filter = "training == 1"
+)
+summary(res_nn, prn = TRUE)
+# plot(res_nn, plots = "garson", custom = FALSE)
+```  
+
+```{r echo=FALSE}
+tune_nn <- read_rds("tune_nn.rds")
+tune_nn[1,]
+res_tr_nn <- read_rds("res_tr_nn.rds")
+eval_dat$NN <- predict(res_tr_nn, pred_data=s_mobile)$Prediction
+head(eval_dat)
+```
+&nbsp;
+&nbsp;  
+
+  
+### Ranger Model  
+
+&nbsp;
+&nbsp; 
+```{r include=FALSE}
+rangerFit <- read_rds("rangerFit.rds")
+best_ranger <- rangerFit$bestTune  
+res_rr <- read_rds("res_rr.rds")
+```  
+
+```{r echo=FALSE}
+pred_rr <- predict(res_rr, data = s_mobile,
+      num.trees = res_rr$num.trees, type = "response")
+eval_dat$Ranger <- pred_rr$predictions[,1]
+head(eval_dat)
+```
+
+
+### Confusion Matrix  
+
+&nbsp;
+&nbsp;  
+
+#### We calculate the confusion matrix and various performance metrics for models on the test set
+
+```{r echo=FALSE}
+confusion(
+  eval_dat,
+  pred = c("logit", "NN", "Ranger"),
+  rvar = "churn",
+  lev = "yes",
+  qnt = 30,
+  train = "Test",
+  data_filter = "training == 1"
+) %>% summary()
+```  
+&nbsp;
+
+> As we can see, the NN and Ranger models are slightly better than the logistic model based on their accuracy, ROME and AUC value. However, when performance is similar, we prefer the simpler model than the complicated ones as the simpler model is easier to intepretat and uncover usrful insights. Thus, we decided to use logistics regression as our final model to predict customers' churn probability.
+
+
+### Final model: Logistic Model
+&nbsp;  
+
+#### We use training data to train the logistic model and predict on the validation and representative datasets
+
+```{r echo=FALSE}
+logit_res <- logistic(
+  s_mobile, 
+  rvar = "churn", 
+  evar = c(
+    "changer", "changem", "revenue", "mou", "overage", "roam", 
+    "conference", "months", "uniqsubs", "custcare", "retcalls", 
+    "dropvce", "eqpdays", "refurb", "smartphone", "highcreditr", 
+    "mcycle", "car", "travel", "region", "occupation"
+  ), 
+  # int = c("highcreditr:travel", "travel:occupation"),
+  lev = "yes", 
+  check = "standardize", 
+  data_filter = "training == 1"
+)
+summary(logit_res)
+```  
+&nbsp;
+```{r}
+## scale the predicated churn probabilities
+p_adj <- function(p) {
+  p_adj <- p / (p + (1 - p) * (1 - 0.02) / 0.02) 
+  return(p_adj)
+}
+```  
+
+```{r include=FALSE}
+## predict churn rate for train/val/rep using the logistic model 
+pred <- predict(logit_res, pred_data = train)
+train <- store(train, pred, name = "p_churn")
+
+pred <- predict(logit_res, pred_data = val)
+val <- store(val, pred, name = "p_churn")
+
+pred <- predict(logit_res, pred_data = reps)
+reps <- store(reps, pred, name = "p_churn") %>% mutate(p_churn = p_adj(p_churn))
+```  
+&nbsp;
+&nbsp;  
+  
+  
+## STEP 2: Use model output to understand the main drivers of churn
+
+```{r echo=FALSE}
+logit_vip <- write.coeff(logit_res, sort=TRUE) %>% format_df(dec = 3)
+logit_vip[1:10,]
+```
+
+#### By scaling the OR from the model above, we are able to reach the following conclusion:  
+
+* The most important feature in affecting attrition is: `r logit_vip$label[2]`, which has an Odds Ratio of 0.187, meaning that compared to retired customers, the odds of customers who are not retired to churn are 81.3% lower, holding all else constant. <br>  
+
+* The least improtant feature that might affect attrition is `r logit_vip$label[27]`, it tells us that compared to car-owners, the odds of non car-owners to churn are about the same as car-owners.<br>  
+
+* The top 5 most important factors that can statistically significant affect attrition rate are: `r logit_vip$label[2:6]`, therefore, we should focused on these factors as valueable considerations in proactive attrition management.<br>   
+
+&nbsp;
+&nbsp;  
+
+#### Insights
+
+* Highcredit
+  For high-credit customers, it is not actionable in the short term. So what we can do is to attract more high-credit customers by offering more incentives in other variables.
+
+* eqpdays
+  The longer a customer has owned current handset, the more likely he/she will churn.
+  So we can provide new device for customer who has owned current handset for certain time.
+  
+* overage
+  The longer mean monthly overage mintutes a customer has, the more likely he/she will churn.
+  In this case, we can provide discounts/free minutes, or refunds for customers whose overage minutes are above  average.
+ 
+ * mou
+  The longer mean monthly minutes a customer uses, the less likely he/she will churn.
+  To reduce the churn rate, we can offer upgraded plan, discounts or free minutes for customers whose monthly use time is higher than the average.  
+  
+&nbsp;
+&nbsp;  
+
+
+#### Based on the importance, we propose the following three plans for S-Mobile to proactively reduce customers' churn rate. For each plan, we cover the attrition manangement tactics through step 3 - step 6. 
+
+***  
+
+
+### Plan one: Reduce **"eqpdays"**  
+
+* Driver: **"eqpdays"**
+* Action: **Offer a new equipment (cellphone) for target customers**
+* Targeting Rule: customers has above average total churn probability AND customers has above average eqpdays.
+* Expected churn benefit: Baseline churn 3.45%, projected churn 2.49%
+
+
+> We will first find customers whose equipment days are above the average value and whose predicted churn probabilities are above 0.2. Then, for each of such client, we offer him 3-year signed contract with a new smart phone. We estimate the new phone could cost us 100 SDG each. If the new CLV calculated surpasses the current CLV by more than 100 SDG, the proposal should be executed.  
+
+&nbsp;
+```{r echo=FALSE}
+## calculate the bchurn_rate and pchurn_rate
+eqpdays_mean <- mean(reps$eqpdays)
+focus_dat <- reps %>% filter(p_churn > 0.02, eqpdays > eqpdays_mean)
+focus_dat$eqpdays <- 326
+
+pred1 <- predict(logit_res, pred_data = focus_dat)
+focus_dat <- store(focus_dat, pred1, name = "p_churn_new") %>% mutate(p_churn_new = p_adj(p_churn_new))
+
+bchurn_rate <- mean(focus_dat$p_churn)
+pchurn_rate <- mean(focus_dat$p_churn_new)
+```  
+
+* The current churn of the cohort in interest is `r format_nr(bchurn_rate, perc=TRUE)`;<br>
+* The projected churn would be `r format_nr(pchurn_rate, perc=TRUE)`.<br>
+
+```{r}
+## Assumptions
+revenue <- mean(focus_dat$revenue)
+month <- 1:60
+cogs <- 0.2
+mdiscount <- 0.008
+```
+
+```{r}
+## create CLV functions
+clv <- function(churn_rate, revenue, maction_cost){
+  month <- 1:60
+  cogs <- 0.2
+  mdiscount <- 0.008
+  
+  product_cost <- revenue * cogs
+  profit <- revenue - product_cost - maction_cost
+  
+  churn_rate <- c(0, rep(churn_rate, 59))
+  prob_sub <- cumprod(1 - churn_rate)
+  exp_profit <- profit * prob_sub
+  pv_profit <- exp_profit/(1 + mdiscount)^(month - 0.5)
+  CLV <- sum(pv_profit)
+  
+  return(CLV)
+}
+```  
+
+```{r include=FALSE}
+## calculate baseline_clv, projected_clv and their difference
+baseline_clv <- clv(bchurn_rate, revenue, 0)
+projected_clv <- clv(pchurn_rate, revenue, 0)
+diff <- projected_clv - baseline_clv
+```  
+
+<<<<<<< HEAD
+* The current CLV of the cohort is `r format_nr(baseline_clv, '$', dec=2)`;<br>
+* The projected CLV would be `r format_nr(projected_clv, '$', dec=2)`. 
+=======
+> The result indicates that S-Mobile can spend up to 180 SGD per subscriber, which is higher than our estimated smart phone cost of 100 SGD. So this proposal can be executed and we can maximizely spend 180 SGD/person to offer a new cellphone for those targeted customers. 
+>>>>>>> 855c2803333680f926255bbd7e81ceb828bd623b
+
+> The result indicates that s-mobile can spend up to 180 SGD per subscriber on the "Phone upgrade", higher than our estimated smart phone cost of 100 SGD. So this proposal can be executed and we can maximizely spend 180 SGD/person to offer a new cellphone for those targeted customers.  
+
+&nbsp;
+&nbsp; 
+
+***  
+
+### Plan two: improve **"region"(CS)** churn  
+
+* Driver: **"region"**
+* Action: Build new communication equipments in the **CS region**
+* Targeting Rule: customers in the CS region.
+* Expected churn benefit: Baseline churn 2.7%, projected churn 1.8%
+
+> We find that customers in Central Singapore (CS) have higher average churn rate compared to customers in other four regions. The resason for this might be the weak signal in the concentrated crowds. So we plan to build new communication equipments in the CS region. We first filter the customers in CS region and use the average churn of this group as the baseline churn. Then, use the average churn rate of customers in other four regions as our target projected churn. After that, we calculated current CLV and new CLV, and the difference between them would be the maxmium expenditure we can spend on the new communication equipments. If the difference is larger than 100 SGD, the proposal should be executed.  
+
+&nbsp;
+```{r include=FALSE}
+## calculate the bchurn_rate and pchurn_rate
+region_CS <- filter(reps, region == "CS")
+bchurn_rate <- mean(region_CS$p_churn)
+
+region_other <- filter(reps, region == c("SW", "NE", "NW"))
+pchurn_rate <- mean(region_other$p_churn)
+```  
+
+* The current churn in the CS region is `r format_nr(bchurn_rate, perc=TRUE)`;<br>
+* The current churn in other regions is `r format_nr(pchurn_rate, perc=TRUE)`.<br>  
+
+#### We will deduce a cost up to the differnce in CLV if we improve the churn in the CS region to the same level of other regions.  
+
+&nbsp;
+```{r include=FALSE}
+## Assumptions
+revenue <- mean(region_CS$revenue)
+month <- 1:60
+cogs <- 0.2
+mdiscount <- 0.008
+```  
+
+```{r include=FALSE}
+## calculate baseline_clv, projected_clv and their difference
+baseline_clv <- clv(bchurn_rate, revenue, 0)
+projected_clv <- clv(pchurn_rate, revenue, 0)
+diff <- projected_clv - baseline_clv
+```  
+
+* The current CLV of a customer in CS is `r format_nr(baseline_clv, '$', dec=2)`;<br>
+* The improved CLV is `r format_nr(projected_clv, '$', dec=2)`.  
+
+&nbsp;  
+
+> The result indicates that S-Mobile can spend up to 241 SGD per subscriber, which is higher than our estimated communication equipment cost of 100 SGD/person. So we can implement the plan 2 and maximizely spend 241 SGD/person to build new communication equipments in the CS region.
+
+***  
+
+
+### Plan Three: reduce **"overage"**
+
+* Driver: **"overage"**
+* Action: Offer overage minutes refund (upper limit : 20 minutes/month, the average revenue/minute is 0.05 SGD)
+* Targeting Rule: **All customers**
+* Expected churn benefit: Baseline churn 2%, projected churn 1.83%
+  
+> We plan to offer overage refunds to customers up to 20 minutes per month. The projected churn after action should be the predicted by the new overage minutes, which is original overage minus 20 minutes. We assume that the average revenue per minute is 0.5 SGD. Calculate the difference between new ClV with projected churn and the original one with 2% churn, if the difference is positive, the proposal should be executed.  
+
+&nbsp;
+
+```{r include=FALSE}
+## calculate the bchurn_rate and pchurn_rate
+overage_dat <- reps
+overage_dat$overage <- reps$overage - 20
+pred <- predict(logit_res, pred_data = overage_dat)
+overage_dat <- store(overage_dat, pred, name = "p_churn_new") %>% mutate(p_churn_new = p_adj(p_churn_new))
+
+bchurn_rate <- mean(overage_dat$p_churn)
+pchurn_rate <- mean(overage_dat$p_churn_new)
+```  
+
+* Current churn is `r format_nr(bchurn_rate, perc=TRUE)`;  
+* Projected churn with the proposal is `r format_nr(pchurn_rate, perc=TRUE)`.
+
+```{r include=FALSE}
+## Assumptions
+rev_minute <- 0.05
+revenue <- mean(reps$revenue)
+revenue_new <- revenue - 20 * rev_minute
+
+month <- 1:60
+cogs <- 0.2
+mdiscount <- 0.008
+```
+
+```{r include=FALSE}
+## calculate baseline_clv, projected_clv and their difference
+baseline_clv <- clv(bchurn_rate, revenue, 0)
+projected_clv <- clv(pchurn_rate, revenue_new, 0)
+diff <- projected_clv - baseline_clv
+
+## calculate the monthly action/offer/incentive cost
+maction_cost <- diff/sum((1/((1+0.008)^seq(0.5, 59.5, 1)))*cumprod(1 - c(0, rep(pchurn_rate, 59))))
+```  
+&nbsp;  
+
+> The result indicates that s-mobile can spend up to 20.69 SGD per subscriber, which is 0.68 SGD per subscriber per month. Since the difference is posotive, we can execute plan 3 and offer customer minutes refund.
+
+
